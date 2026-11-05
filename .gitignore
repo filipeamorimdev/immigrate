@@ -13,3 +13,4 @@ htmlcov/
 data/
 .samples/
 .claude/
+.DS_Store

@@ -12,10 +12,7 @@ follows the catalog's `CONTRIBUTIONS.md` and recent community apps such as
    `ghcr.io/filipeamorimdev/immigrate` yet. Push a `v0.1.0` tag so the release
    workflow publishes `0.1.0`, and make the package public. Then pin it in
    `ix_values.yaml` with its digest, as other apps do: `0.1.0@sha256:...`.
-2. **Make the GitHub repo public under the name `immigrate`.**
-   `filipeamorimdev/immigrate` exists but is private. `app.yaml`, the README,
-   and the changelog link all point to it.
-3. **Prepare an icon and screenshots.** Attach them to the PR. A reviewer uploads
+2. **Prepare an icon and screenshots.** Attach them to the PR. A reviewer uploads
    them to the TrueNAS CDN and gives you the URLs for `icon` and `screenshots` in
    `app.yaml` and `item.yaml`. The icon URL in `app.yaml` is a placeholder in
    their usual pattern.
