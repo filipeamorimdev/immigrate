@@ -1,0 +1,8 @@
+*
+!src
+!pyproject.toml
+!README.md
+!requirements.lock
+**/__pycache__
+**/*.egg-info
+**/.DS_Store

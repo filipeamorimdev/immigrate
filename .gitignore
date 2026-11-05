@@ -12,3 +12,4 @@ htmlcov/
 .env
 data/
 .samples/
+.claude/
