@@ -1,0 +1,34 @@
+resources:
+  limits:
+    cpus: 2
+    memory: 4096
+
+TZ: Europe/Lisbon
+
+immigrate:
+  immich_url: http://immich.example.test:2283
+  immich_api_key: test-api-key
+  log_level: DEBUG
+  additional_envs: []
+
+run_as:
+  user: 568
+  group: 568
+
+network:
+  web_port:
+    bind_mode: published
+    port_number: 8081
+  host_network: false
+
+storage:
+  data:
+    type: host_path
+    host_path_config:
+      path: /opt/tests/mnt/immigrate/data
+      create_host_path: true
+  nas:
+    type: host_path
+    host_path_config:
+      path: /opt/tests/mnt/immigrate/nas
+      create_host_path: true

@@ -1,0 +1,28 @@
+services:
+  immigrate:
+    # Pin a version, such as :0.2.0, to update only when you choose to.
+    image: ghcr.io/filipeamorimdev/immigrate:latest
+    container_name: immigrate
+    restart: unless-stopped
+    ports:
+      - "${IMMIGRATE_PORT:-8088}:8088"
+    user: "${IMMIGRATE_UID:-1000}:${IMMIGRATE_GID:-1000}"
+    environment:
+      IMMICH_URL: ${IMMICH_URL:-}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # The NAS folder you choose the library from in the page. :ro makes the mount
+      # read-only, so nothing in it can be changed from here.
+      - ${NAS_FOLDER:-/mnt}:/nas:ro
+      - immigrate-data:/data
+    read_only: true
+    tmpfs:
+      - /run
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  immigrate-data:

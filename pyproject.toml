@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "immigrate"
+description = "Sync an Apple Photos library into Immich from a Docker container, without a Mac."
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["version"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "httpx>=0.28,<1",
+    "osxphotos>=0.77,<0.78",
+    # Time zone names, since the slim image may have none of its own.
+    "tzdata>=2024.1",
+    "uvicorn>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.13", "pytest>=8", "pytest-cov>=6", "ruff>=0.8"]
+
+[project.scripts]
+immigrate = "immigrate.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "immigrate.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+immigrate = ["static/*", "static/fonts/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+branch = true
+source = ["immigrate"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+extend-exclude = ["build", ".samples"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "BLE", "C4", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "S603", "S607", "E501"]
+"src/immigrate/immich.py" = ["SIM115"]
+"src/immigrate/config.py" = ["S104"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["osxphotos.*"]
+ignore_missing_imports = true
