@@ -45,7 +45,7 @@ Because a photo library should not become inaccessible just because you changed 
 
 Because a lifetime of memories deserves better than a mysterious filesystem error.
 
-Because your NAS is yours.
+**Because your NAS is yours.**
 
 And because sometimes the best solution to an Apple problem is to stop asking Apple for permission.
 
@@ -118,7 +118,7 @@ NAS folders until you find your `.photoslibrary`. Review the scan and upload pla
 before you start. Your libraries, records, and settings are kept in the
 `immigrate-data` volume, so they survive updates.
 
-### TrueNAS SCALE
+### TrueNAS SCALE (work in progress)
 
 This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
 
@@ -138,7 +138,7 @@ services:
     ports:
       - "8088:8088"
     # The user and group that can read the library.
-    user: "3000:3000"
+    user: "1000:1000"
     environment:
       LOG_LEVEL: INFO
     volumes:
@@ -272,3 +272,7 @@ Immigrate reads the Photos library with
 [osxphotos](https://github.com/RhetTbull/osxphotos). The interface uses the
 Bricolage Grotesque and Atkinson Hyperlegible typefaces, whose licenses are in
 `src/immigrate/static/fonts`.
+
+## License
+
+Immigrate is released under the [MIT License](LICENSE).
