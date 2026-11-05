@@ -48,10 +48,12 @@ docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 
 ## Releases
 
-1. Update `__version__` in `src/immigrate/__init__.py` and `CHANGELOG.md`.
+1. Update `__version__` in `src/immigrate/__init__.py`.
 2. Tag the commit, for example `git tag v0.2.0`. The tag must match `__version__`.
 3. Push the tag. GitHub Actions runs the checks, then publishes
    `ghcr.io/<owner>/immigrate` for `amd64` and `arm64`, tagged `0.2.0`, `0.2`, and
    `latest`. A pre-release tag such as `v0.2.0-rc.1` only gets its own name.
 4. After the first release, open the package on GitHub, then Package settings, and
    change its visibility to public. GitHub makes new packages private.
+5. Publish a GitHub release for the tag that says what changed, for example
+   `gh release create v0.2.0 --verify-tag --generate-notes`.
