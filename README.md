@@ -1,12 +1,13 @@
-# Immigrate
+# <img src="packaging/truenas/icon.svg" alt="" width="36" height="36" align="top"> Immigrate - Immich migrate
 
-### Your photos belong on your NAS. Apple Photos just needs to get out of the way.
+## Your photos belong on your NAS. Apple Photos just needs to get out of the way.
 
 It started with a simple idea: keep a lifetime of photos safely stored on a NAS, where they belong.
 
 Then Apple Photos decided otherwise.
 
-A massive photo library sitting peacefully on a TrueNAS SMB share suddenly became a problem. Permissions changed. Photos stopped opening. The database passed its integrity checks, but the library still refused to load.
+A massive photo library sitting peacefully on a TrueNAS SMB share suddenly became a problem. Permissions changed. Photos stopped opening, or asked to restore the library every time it did.
+The database passed its integrity checks, but the library still refused to load.
 
 `Path is not writable.`
 
@@ -26,7 +27,7 @@ So instead of fighting Apple Photos any longer, we decided to build a way out.
 
 ## Meet Immigrate
 
-Immigrate is an open-source migration assistant designed to help people move their Apple Photos libraries to [Immich](https://immich.app/), their own self-hosted photo management platform.
+Immigrate is an open-source, one-way sync that helps people move their Apple Photos libraries to [Immich](https://immich.app/), their own self-hosted photo management platform.
 
 It exists for people who want control over their photos, their storage, and their memories — without being locked into a single application or cloud service.
 
@@ -75,6 +76,22 @@ No cloud subscription required. No proprietary lock-in. Just your photos, your s
 Sync is one-way and only adds. Immigrate never changes the library, and it
 never deletes anything from Immich.
 
+## Sending a folder
+
+You can also add any other folder on the NAS, such as old scans or a camera's card
+dumps. Immigrate sends the photos and videos in it and its subfolders, with the same
+scan, plan, schedule, resume, and check as a Photos library.
+
+- Dates, locations, and other details come from the files themselves. If a file has
+  no capture date, Immich uses its modification time.
+- A `.xmp` file beside a photo is sent with it, named `IMG_1.jpg.xmp` or `IMG_1.xmp`.
+- A photo and a RAW file with the same name in the same folder are stacked.
+- Each folder can become an album, with names like `Photos/Trips/Lisbon`. This starts
+  turned off, because Immigrate never removes albums.
+- Immigrate skips hidden files and folders, folders starting with `@` such as Synology's
+  `@eaDir`, trash and snapshot folders, and photo apps' libraries. It doesn't follow
+  symlinks. Add a Photos library on its own.
+
 ## A look around
 
 Every library you add is listed with its last sync and schedule.
@@ -86,7 +103,8 @@ the API key.
 
 ![Settings page with the Immich address and API key fields and a Connect button](docs/images/settings-connection.png)
 
-Add a library by browsing the NAS folders until you find the `.photoslibrary`.
+Add a library by browsing the NAS folders until you find the `.photoslibrary`, or a
+folder of photos.
 
 ![Step 1 of adding a library: Choose a Photos library](docs/images/add-library.png)
 
@@ -114,11 +132,11 @@ it on TrueNAS, in Portainer, or with Docker Compose. Each way needs two things f
   need to be an admin key. You can enter it in the page after installing.
 
 Once it's running, open `http://YOUR_NAS_IP:8088`, connect to Immich, and browse the
-NAS folders until you find your `.photoslibrary`. Review the scan and upload plan
-before you start. Your libraries, records, and settings are kept in the
+NAS folders until you find your `.photoslibrary` or a folder of photos. Review the scan
+and upload plan before you start. Your libraries, records, and settings are kept in the
 `immigrate-data` volume, so they survive updates.
 
-### TrueNAS SCALE (work in progress)
+### TrueNAS SCALE
 
 This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
 
@@ -126,7 +144,7 @@ This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
    **Install via YAML**.
 2. Enter `immigrate` as the name.
 3. Paste the YAML below. Change `/mnt/tank` to the pool or dataset that holds the
-   library, and `3000:3000` to the user and group that can read it.
+   library, and `1000:1000` to the user and group that can read it.
 4. Click **Save**. Immigrate appears in your installed apps.
 
 ```yaml
@@ -256,6 +274,11 @@ and in the log. Until you choose one, Immigrate uses `TZ` if it's set, and UTC i
 - Smart Albums aren't recreated.
 - If you change an edit after syncing, the new version is added and the old one stays.
 - Removing a photo from an album in Apple Photos doesn't remove it from the Immich album.
+- In a folder, a file you change in place is added as a new asset, and the old one stays.
+  A file you move is matched to its existing asset, but stays in its old album too.
+- In a folder, Immigrate doesn't pair Live Photos by name. Immich links a pair itself
+  when both files carry the same content ID, as Apple's exports do. Changing a `.xmp`
+  file after a sync doesn't update the asset.
 - There's no login, so run it on your own network only. The API key is stored in
   the `/data` volume and never sent to the browser. Requests from other websites
   are refused.

@@ -1,7 +1,7 @@
-"""One-way sync from an Apple Photos library into Immich.
+"""One-way sync from an Apple Photos library or a plain folder into Immich.
 
 Nothing here deletes anything: not in the library, not in Immich. A photo
-removed from Apple Photos stays in Immich.
+removed from Apple Photos or from the folder stays in Immich.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from .immich import Immich, ImmichError
@@ -48,6 +49,17 @@ class Options:
             raise ValueError("hidden must be 'skip' or 'archive'")
         options.workers = max(1, min(int(options.workers), 8))
         return options
+
+
+def sidecar_for(item: Item, options: Options) -> bytes | None:
+    """Build a Photos item's sidecar. A folder's files are sent with what they already have.
+
+    Immich prefers a sidecar's dates to the file's own, and all a folder knows is when
+    the file last changed, so building one would replace real capture dates.
+    """
+    if not item.from_folder:
+        return build_sidecar(item, options.people_as_tags)
+    return Path(item.sidecar_path).read_bytes() if item.sidecar_path else None
 
 
 def fingerprint(item: Item, options: Options) -> str:
@@ -170,7 +182,7 @@ class Job:
         current = fingerprint(item, options)
         created, modified = item.taken.isoformat(), item.modified.isoformat()
         visibility = "archive" if item.hidden else "timeline"
-        sidecar = build_sidecar(item, options.people_as_tags)
+        sidecar = sidecar_for(item, options)
         previous = self.known.get(item.uuid) or {}
         ids: dict[str, str] = dict(previous.get("asset_ids") or {})
         sent = 0

@@ -13,6 +13,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .folder_library import folder_marker, scan_folder
+from .folders import FOLDER, PHOTOS
 from .library import Scan, scan_library
 from .state import State
 from .sync import Options
@@ -39,9 +41,13 @@ class Library:
         path: str,
         options: dict[str, Any] | None = None,
         auto_minutes: int = 0,
+        kind: str = PHOTOS,
     ) -> None:
         self.id = library_id(path)
         self.path = path
+        # Saved rather than worked out from the path. Older versions could point at a
+        # Photos library whose path doesn't end in .photoslibrary.
+        self.kind = kind
         self.options = Options.from_dict(options)
         self.auto_minutes = auto_minutes
         self.folder = folder_for(data_dir, path)
@@ -63,6 +69,7 @@ class Library:
     def to_settings(self) -> dict[str, Any]:
         return {
             "path": self.path,
+            "kind": self.kind,
             "options": asdict(self.options),
             "autoMinutes": self.auto_minutes,
         }
@@ -91,8 +98,11 @@ class Library:
         except OSError:
             log.warning("Couldn't save the read of %s, so it will be lost on restart", self.name)
 
-    def mtime(self) -> float | None:
+    def change_marker(self) -> float | str | None:
+        """Return a value that differs once the library has changed, or None if it's unreadable."""
         try:
+            if self.kind == FOLDER:
+                return folder_marker(self.path)
             return os.stat(Path(self.path) / "database" / "Photos.sqlite").st_mtime
         except OSError:
             return None
@@ -106,17 +116,23 @@ class Library:
         now = time.monotonic()
         if self.scan_logged_at is None or now - self.scan_logged_at >= SCAN_LOG_SECONDS:
             self.scan_logged_at = now
-            log.info("Read %d of %d items", done, total)
+            if total:
+                log.info("Read %d of %d items", done, total)
+            else:
+                log.info("Found %d items so far", done)
 
     def read(self) -> None:
         """Read the library in this thread. The caller sets `scan_running` first."""
-        mtime = self.mtime()
+        marker = self.change_marker()
         log.info("Reading the library at %s", self.path)
+        scan = scan_folder if self.kind == FOLDER else scan_library
         try:
-            self.scan = scan_library(self.path, self.report_scan)
+            self.scan = scan(self.path, self.report_scan)
             log.info("Scanned %s: %d items", self.path, len(self.scan.items))
+            if self.scan.unreadable:
+                log.warning("Couldn't open %d folders", len(self.scan.unreadable))
             self.save_scan(self.scan)
-            self.state.set_meta("scan_mtime", mtime)
+            self.state.set_meta("scan_mtime", marker)
         except Exception as exc:
             log.exception("Couldn't read the library at %s", self.path)
             self.scan_error = (

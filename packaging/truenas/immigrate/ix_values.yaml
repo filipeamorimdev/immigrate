@@ -1,7 +1,7 @@
 images:
   image:
     repository: ghcr.io/filipeamorimdev/immigrate
-    tag: "0.1.0"
+    tag: "0.1.0@sha256:2732cf622f5a5f15c0acc1ca1adcd5bafa1f19a32b70cf917bc61007afbb985a"
   container_utils_image:
     repository: ghcr.io/truenas/containers/container-utils
     tag: "1.1.2@sha256:6ddfdc314af9d18cfacb836ad266ef0ed91fecaa3686b20be72e464972860c08"

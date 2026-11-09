@@ -169,6 +169,7 @@ h2.section { margin-top: 3.5rem; }
 .crumbs button, .folder { padding: 0.2rem 0; border: 0; background: none; color: var(--ink); font: inherit; cursor: pointer; }
 .crumbs button { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .crumbs button:last-child { text-decoration: none; }
+.use-folder { margin: 0.5rem 0 1rem; }
 .folders { margin: 0 0 1.5rem; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .folders li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; border-bottom: 1px solid var(--line); }
 .folders .folder { flex: 1; padding: 0.6rem 0; text-align: left; }

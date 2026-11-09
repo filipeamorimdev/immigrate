@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from immigrate.folders import FolderError, display_path, library_at, list_folders
+from immigrate.folders import FolderError, display_path, library_at, list_folders, source_at
 
 
 @pytest.fixture
@@ -24,6 +24,25 @@ def test_lists_only_visible_folders(root):
     pool = list_folders(str(root), "pool")
     assert pool["parent"] == ""
     assert [f["path"] for f in pool["folders"]] == ["pool/shared"]
+
+
+def test_system_folders_are_not_listed(root):
+    (root / "pool" / "@eaDir").mkdir()
+    (root / "pool" / "#recycle").mkdir()
+    assert [f["name"] for f in list_folders(str(root), "pool")["folders"]] == ["shared"]
+
+
+def test_any_other_folder_can_be_chosen_and_a_library_stays_a_library(root):
+    assert source_at(str(root), "pool/shared") == (root.resolve() / "pool/shared", "folder")
+    assert source_at(str(root), "") == (root.resolve(), "folder")
+    library = "pool/shared/Photos.photoslibrary"
+    assert source_at(str(root), library) == (root.resolve() / library, "photos")
+    with pytest.raises(FolderError, match="no Photos database"):
+        source_at(str(root), "pool/shared/Empty.photoslibrary")
+    with pytest.raises(FolderError, match="doesn't read"):
+        source_at(str(root), "pool/.hidden")
+    with pytest.raises(FolderError, match="outside"):
+        source_at(str(root), "..")
 
 
 def test_marks_photos_libraries(root):

@@ -257,7 +257,7 @@ def test_scheduled_sync_only_runs_when_the_library_changes(client, monkeypatch):
     library.auto_minutes = 15
     synced = []
     monkeypatch.setattr(runtime, "read_and_sync", synced.append)
-    monkeypatch.setattr(library, "mtime", lambda: 42.0)
+    monkeypatch.setattr(library, "change_marker", lambda: 42.0)
     runtime.auto_sync_once(now=10_000.0)
     assert synced == [library] and library.last_check == 10_000.0
     library.state.set_meta("synced_mtime", 42.0)
@@ -265,7 +265,7 @@ def test_scheduled_sync_only_runs_when_the_library_changes(client, monkeypatch):
     assert len(synced) == 1 and library.last_check == 20_000.0
     runtime.auto_sync_once(now=20_100.0)
     assert library.last_check == 20_000.0, "not due again yet"
-    monkeypatch.setattr(library, "mtime", lambda: 43.0)
+    monkeypatch.setattr(library, "change_marker", lambda: 43.0)
     runtime.auto_sync_once(now=30_000.0)
     assert len(synced) == 2
 

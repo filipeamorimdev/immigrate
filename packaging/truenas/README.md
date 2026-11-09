@@ -8,14 +8,14 @@ follows the catalog's `CONTRIBUTIONS.md` and recent community apps such as
 
 ## What's left before submitting
 
-1. **Publish a version of the image.** Nothing is at
-   `ghcr.io/filipeamorimdev/immigrate` yet. Push a `v0.1.0` tag so the release
-   workflow publishes `0.1.0`, and make the package public. Then pin it in
-   `ix_values.yaml` with its digest, as other apps do: `0.1.0@sha256:...`.
-2. **Prepare an icon and screenshots.** Attach them to the PR. A reviewer uploads
-   them to the TrueNAS CDN and gives you the URLs for `icon` and `screenshots` in
-   `app.yaml` and `item.yaml`. The icon URL in `app.yaml` is a placeholder in
-   their usual pattern.
+1. **Pin the 0.2.0 image.** The image pinned now is 0.1.0, which can't send a
+   folder. After the `v0.2.0` release, pin it in `ix_values.yaml` with its digest,
+   `0.2.0@sha256:...`, and set `app_version` in `app.yaml` to `0.2.0`.
+2. **Attach the icon and screenshots to the PR.** The icon is `icon.svg` in this
+   folder, with `icon.png` as a 512px copy. Screenshots are in `docs/images/`. A
+   reviewer uploads them to the TrueNAS CDN and gives you the URLs for `icon` and
+   `screenshots` in `app.yaml` and `item.yaml`. The icon URL in `app.yaml` is a
+   placeholder in their usual pattern.
 
 ## When you submit
 

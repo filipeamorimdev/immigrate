@@ -22,7 +22,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__, timezones
 from .config import Config
-from .folders import FolderError, display_path, library_at, list_folders
+from .folders import FOLDER, PHOTOS, FolderError, display_path, list_folders, source_at
 from .immich import Immich, ImmichError
 from .libraries import Library, library_id, migrate_single_library
 from .sync import Job, Options, plan, verify
@@ -74,7 +74,8 @@ class Runtime:
         self.libraries: dict[str, Library] = {}
         for entry in self.settings["libraries"]:
             minutes = int(entry.get("autoMinutes") or 0)
-            library = Library(config.data_dir, entry["path"], entry.get("options"), minutes)
+            kind = entry.get("kind", PHOTOS)
+            library = Library(config.data_dir, entry["path"], entry.get("options"), minutes, kind)
             self.libraries[library.id] = library
 
     def close(self) -> None:
@@ -136,13 +137,18 @@ class Runtime:
             raise HTTPException(404, "Immigrate isn't syncing that library.")
         return library
 
-    def add_library(self, path: str) -> Library:
+    def add_library(self, path: str, kind: str = PHOTOS) -> Library:
         with self.lock:
             library = self.libraries.get(library_id(path))
             if library is None:
+                options = dict(self.settings["defaults"]["options"])
+                if kind == FOLDER:
+                    # A dated folder tree could make hundreds of albums, and Immigrate
+                    # never deletes them, so this one has to be asked for.
+                    options["albums"] = False
                 # Not on a schedule until its first sync, so nothing runs before the
                 # choices have been seen.
-                library = Library(self.config.data_dir, path, self.settings["defaults"]["options"])
+                library = Library(self.config.data_dir, path, options, kind=kind)
                 self.libraries[library.id] = library
         self.save_settings()
         return library
@@ -263,8 +269,8 @@ class Runtime:
             if not minutes or now - library.last_check < minutes * 60:
                 continue
             library.record_check(now)
-            mtime = library.mtime()
-            if mtime is None or mtime == library.state.get_meta("synced_mtime"):
+            marker = library.change_marker()
+            if marker is None or marker == library.state.get_meta("synced_mtime"):
                 continue
             log.info("%s changed, so it's being synced", library.name)
             try:
@@ -287,6 +293,7 @@ class Runtime:
         return {
             "id": library.id,
             "name": library.name,
+            "kind": library.kind,
             "path": display_path(self.config.library_root, library.path),
             "options": asdict(library.options),
             "autoMinutes": minutes,
@@ -430,12 +437,14 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
 
     @app.post("/api/libraries")
     async def add_library(request: Request) -> dict[str, Any]:
-        path = (await request.json()).get("path") or ""
+        path = (await request.json()).get("path")
+        if not isinstance(path, str):
+            raise HTTPException(422, "Choose a Photos library or a folder.")
         try:
-            found = library_at(runtime.config.library_root, path)
+            found, kind = source_at(runtime.config.library_root, path)
         except FolderError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return runtime.library_state(runtime.add_library(str(found)))
+        return runtime.library_state(runtime.add_library(str(found), kind))
 
     @app.post("/api/libraries/{library_id}/settings")
     async def library_settings(library_id: str, request: Request) -> dict[str, Any]:

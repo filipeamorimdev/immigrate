@@ -37,6 +37,11 @@ immigrate = ["static/*", "static/fonts/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = [
+    # Third-party noise: osxphotos' PhotosDB cleanup and Starlette's test client.
+    "ignore:Exception ignored in.*PhotosDB.__del__:pytest.PytestUnraisableExceptionWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
 
 [tool.coverage.run]
 branch = true

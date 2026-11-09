@@ -82,6 +82,8 @@ function css(name) {
 // A library counts as set up once anything from it has reached Immich.
 const isSetUp = (library) => !!(library.lastSync || library.counts.done);
 const setupDone = () => state.libraries.some(isSetUp);
+// The top of the shared folder has no path of its own, and the folder browser calls it NAS.
+const shownPath = (library) => library.path || "NAS";
 
 function page() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -199,20 +201,42 @@ function renderFolders() {
   }).join("");
   const empty = folders.folders.length ? "" : `<li class="empty">There are no folders here.</li>`;
   const more = folders.more ? `<li class="empty">And ${plural(folders.more, "more folder")}.</li>` : "";
+  const here = added.get(folders.path);
+  const useHere = here && isSetUp(here)
+    ? `<a class="button" href="#/library/${here.id}">Open</a>`
+    : `<button class="button" data-pick="${escapeHtml(folders.path)}">Use this folder</button>`;
   return `<nav class="crumbs" aria-label="Folder">${crumbs}</nav>
+    <div class="actions use-folder">${useHere}</div>
     ${errorLine(folderError)}
     <ul class="folders">${rows}${empty}${more}</ul>`;
 }
 
 function renderWizardLibrary() {
-  return `<h2>Choose a Photos library</h2>
-    <p class="lead">Open the folders on your NAS until you find the library. Its name ends in .photoslibrary. Immigrate only reads it.</p>
+  return `<h2>Choose a Photos library or a folder</h2>
+    <p class="lead">Open the folders on your NAS until you find what you want to send. A Photos library's name ends in .photoslibrary. From any other folder, Immigrate sends the photos and videos inside it, including its subfolders. Immigrate only reads them.</p>
     ${renderFolders()}
     ${errorLine(formError)}
     ${setupDone() ? `<div class="actions"><a class="button" href="#/libraries">Cancel</a></div>` : ""}`;
 }
 
-function renderSummary(summary) {
+function renderUnreadable(summary) {
+  if (!summary.unreadable) return "";
+  const names = summary.unreadableFolders.map(escapeHtml).join(", ");
+  const more = summary.unreadable > summary.unreadableFolders.length ? ", and more" : "";
+  return `<div class="note"><p>${plural(summary.unreadable, "folder")} couldn't be opened, so nothing in ${summary.unreadable === 1 ? "it" : "them"} can be sent: ${names}${more}. Check that the container's user can read ${summary.unreadable === 1 ? "it" : "them"}, then choose Read again.</p></div>`;
+}
+
+function renderSummary(summary, kind) {
+  if (kind === "folder") {
+    return `<div class="figures">
+        ${figure(count(summary.photos), "photos")}
+        ${figure(count(summary.videos), "videos")}
+        ${figure(count(summary.raw), "RAW pairs")}
+        ${figure(count(summary.albums), "folders")}
+        ${figure(bytes(summary.bytesWithEdits), "total size")}
+      </div>
+      ${renderUnreadable(summary)}`;
+  }
   return `<div class="figures">
       ${figure(count(summary.photos), "photos")}
       ${figure(count(summary.videos), "videos")}
@@ -234,12 +258,16 @@ function renderWizardRead(library) {
   const { running, done, total, error, summary } = library.scan;
   const leave = setupDone() ? `<button class="button" data-action="cancel">Cancel</button>` : "";
   if (running) {
+    const opening = library.kind === "folder"
+      ? "Looking through the folder. Large folders can take a few minutes."
+      : "Opening the Photos database. Large libraries can take a few minutes.";
+    const found = done ? `${plural(done, "item")} found so far.` : opening;
     return `<h2>Reading ${escapeHtml(library.name)}</h2>
-      <p class="lead">${total ? `${count(done)} of ${count(total)} items read.` : "Opening the Photos database. Large libraries can take a few minutes."}</p>`;
+      <p class="lead">${total ? `${count(done)} of ${count(total)} items read.` : found}</p>`;
   }
   if (!summary) {
     return `<h2>Read ${escapeHtml(library.name)}</h2>
-      <p class="lead">Immigrate reads ${escapeHtml(library.path)} and doesn't change it.</p>
+      <p class="lead">Immigrate reads ${escapeHtml(shownPath(library))} and doesn't change it.</p>
       ${error ? `<div class="note bad"><p>${escapeHtml(error)}</p></div>` : ""}
       ${errorLine(formError)}
       <div class="actions"><button class="button primary" data-action="read">Read library</button>
@@ -247,13 +275,14 @@ function renderWizardRead(library) {
   }
   const before = isSetUp(library)
     ? " Immigrate has synced this library before, so items already in Immich won't be sent again." : "";
+  const empty = !summary.total && library.kind === "folder";
   return `<h2>${plural(summary.total, "item")} in ${escapeHtml(library.name)}</h2>
     <p class="lead">Read ${when(summary.scannedAt)}.${before}</p>
-    ${renderSummary(summary)}
+    ${empty ? `<div class="note"><p>There are no photos or videos in this folder. A Photos library inside it has to be added on its own.</p></div>` : renderSummary(summary, library.kind)}
     ${renderMissing(library)}
     ${errorLine(formError)}
     <div class="actions">
-      <a class="button primary" href="#/add/${library.id}/choose">Choose what to send</a>
+      ${empty ? "" : `<a class="button primary" href="#/add/${library.id}/choose">Choose what to send</a>`}
       <button class="button" data-action="read">Read again</button>
       <button class="button" data-action="back">Back</button>${leave}
     </div>`;
@@ -305,7 +334,24 @@ function checkbox(values, name, title, detail) {
     <span>${title}</span><small>${detail}</small></label>`;
 }
 
-function renderChoices(values) {
+function renderSchedule(values, thing) {
+  return `<fieldset><legend>Keep in sync</legend>
+        <label class="field"><small>Immigrate checks the ${thing} on this schedule and sends anything new or changed.</small>
+          <select name="autoMinutes">${SCHEDULES.map(([value, text]) =>
+            `<option value="${value}" ${values.autoMinutes === value ? "selected" : ""}>${text}</option>`).join("")}</select>
+        </label>
+      </fieldset>`;
+}
+
+function renderChoices(values, kind) {
+  if (kind === "folder") {
+    return `<form id="choices">
+        <fieldset><legend>Organization</legend>
+          ${checkbox(values, "albums", "Make an album from each folder", "Albums get names like Photos/Trips/Lisbon. Immigrate never removes albums, so leave this off if you have a lot of folders.")}
+        </fieldset>
+        ${renderSchedule(values, "folder")}
+      </form>`;
+  }
   return `<form id="choices">
       <fieldset><legend>Edited photos</legend>
         ${radio(values, "edits", "stack", "Send edits and originals", "Immich shows the edit, with the original stacked behind it.")}
@@ -319,21 +365,18 @@ function renderChoices(values) {
         ${checkbox(values, "albums", "Recreate albums", "Albums in folders become names like Trips/Lisbon.")}
         ${checkbox(values, "people_as_tags", "Add people as tags", "Names become tags such as People/Ana. Immich still finds faces on its own.")}
       </fieldset>
-      <fieldset><legend>Keep in sync</legend>
-        <label class="field"><small>Immigrate checks the library on this schedule and sends anything new or changed.</small>
-          <select name="autoMinutes">${SCHEDULES.map(([value, text]) =>
-            `<option value="${value}" ${values.autoMinutes === value ? "selected" : ""}>${text}</option>`).join("")}</select>
-        </label>
-      </fieldset>
+      ${renderSchedule(values, "library")}
     </form>`;
 }
 
 function readChoices(base) {
   const form = document.getElementById("choices");
   const data = new FormData(form);
+  // A folder's form leaves out the choices that only apply to Photos libraries.
+  const chosen = (name, value) => form.elements[name] ? value : base.options[name];
   return {
-    options: { ...base.options, edits: data.get("edits"), hidden: data.get("hidden"),
-      albums: data.has("albums"), people_as_tags: data.has("people_as_tags") },
+    options: { ...base.options, edits: chosen("edits", data.get("edits")), hidden: chosen("hidden", data.get("hidden")),
+      albums: data.has("albums"), people_as_tags: chosen("people_as_tags", data.has("people_as_tags")) },
     autoMinutes: Number(data.get("autoMinutes")),
   };
 }
@@ -362,9 +405,10 @@ function renderWizardChoose(library) {
       ${figure(count(result.newAlbums), "new albums")}
     </div>
     <p class="lead">Immich needs extra space for thumbnails and transcoded videos on top of this.</p>` : "";
+  const removed = library.kind === "folder" ? "this folder" : "Apple Photos";
   return `<h2>Choose what to send</h2>
-    <p class="lead">These start from the defaults in Settings. They're saved for ${escapeHtml(library.name)} when you start the sync, and you can change them later on its page. Nothing is deleted. Photos you remove from Apple Photos stay in Immich.</p>
-    ${renderChoices(values)}
+    <p class="lead">These start from the defaults in Settings. They're saved for ${escapeHtml(library.name)} when you start the sync, and you can change them later on its page. Nothing is deleted. Photos you remove from ${removed} stay in Immich.</p>
+    ${renderChoices(values, library.kind)}
     ${summary}
     ${errorLine(formError)}
     <div class="actions"><button class="button primary" data-action="start">Start sync</button>
@@ -384,7 +428,10 @@ function statusLine(library) {
       : `Sending: ${count(job.total - job.waiting)} of ${count(job.total)} items checked, ${count(job.done)} sent.`;
   }
   const { running, done, total } = library.scan;
-  if (running) return total ? `Reading the library: ${count(done)} of ${count(total)} items.` : "Reading the library.";
+  if (running) {
+    if (total) return `Reading the library: ${count(done)} of ${count(total)} items.`;
+    return done ? `Reading the library: ${plural(done, "item")} found so far.` : "Reading the library.";
+  }
   if (library.queued) return "Starting the sync.";
   const last = library.lastSync;
   if (!last) return library.scan.summary ? "Read, but not synced yet." : "Not synced yet.";
@@ -413,7 +460,7 @@ function syncButton(library) {
 function renderDashboard() {
   const cards = state.libraries.map((library) => `<li class="card">
       <h3><a href="#/library/${library.id}">${escapeHtml(library.name)}</a></h3>
-      <p class="muted path">${escapeHtml(library.path)}</p>
+      <p class="muted path">${escapeHtml(shownPath(library))}</p>
       <p>${statusLine(library)}</p>
       <p class="muted">${scheduleLine(library)}</p>
       <div class="actions">${syncButton(library)}<a class="button" href="#/library/${library.id}">Open</a></div>
@@ -506,15 +553,15 @@ function renderLibrary(library) {
   const busy = library.scan.running || library.queued || isRunning(library.job);
   return `<p><a class="back" href="#/libraries">All libraries</a></p>
     <h2>${escapeHtml(library.name)}</h2>
-    <p class="lead">${escapeHtml(library.path)}<br>${scheduleLine(library)}</p>
+    <p class="lead">${escapeHtml(shownPath(library))}<br>${scheduleLine(library)}</p>
     ${renderActivity(library)}
     ${renderCheck(library)}
     ${summary ? `<h3 class="section">In the library</h3>
       <p class="lead">${plural(summary.total, "item")}, read ${when(summary.scannedAt)}.</p>
-      ${renderSummary(summary)}${renderMissing(library)}` : ""}
+      ${renderSummary(summary, library.kind)}${renderMissing(library)}` : ""}
     <h3 class="section">Settings for this library</h3>
     <p class="lead">Every sync of ${escapeHtml(library.name)} uses these, by hand or on the schedule. Libraries you add later start from the defaults in <a href="#/settings">Settings</a>.</p>
-    ${renderChoices(values)}
+    ${renderChoices(values, library.kind)}
     ${next}
     ${saveBar("save-library", saved)}
     ${renderLeftovers(library, busy)}
@@ -545,7 +592,7 @@ function renderSettings() {
     <h3 class="section">Time zone</h3>
     ${renderTimeZone()}
     <h3 class="section">Defaults for new libraries</h3>
-    <p class="lead">A library you add starts with these choices. Changing them doesn't change libraries you've already added. Change those on each library's page.</p>
+    <p class="lead">A library you add starts with these choices. A folder only uses the schedule, and its albums start turned off. Changing these doesn't change libraries you've already added. Change those on each library's page.</p>
     ${renderChoices(values)}
     ${saveBar("save-defaults", saved)}`;
 }

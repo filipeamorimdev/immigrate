@@ -39,6 +39,8 @@ class Item:
     in_icloud: bool = False
     referenced: bool = False
     expected_path: str = ""
+    from_folder: bool = False  # the file's own metadata is right, so no sidecar is built
+    sidecar_path: str = ""  # a sidecar that was already beside a file in a folder
     title: str = ""
     description: str = ""
     keywords: list[str] = field(default_factory=list)
@@ -75,6 +77,7 @@ class Scan:
     album_names: list[str]
     people_count: int
     scanned_at: str
+    unreadable: list[str] = field(default_factory=list)  # folders that couldn't be opened
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -117,6 +120,8 @@ class Scan:
             "missingReferenced": sum(1 for i in items if i.missing_reason == "referenced"),
             "albums": len(self.album_names),
             "people": self.people_count,
+            "unreadable": len(self.unreadable),
+            "unreadableFolders": self.unreadable[:20],
             "bytesOriginals": sum(i.size_for(False) for i in items),
             "bytesWithEdits": sum(i.size_for(True) for i in items),
         }

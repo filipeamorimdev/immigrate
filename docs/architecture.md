@@ -1,11 +1,13 @@
 # Architecture
 
 Immigrate is one Python process that serves a static page and syncs one or more
-libraries. It runs at most one scan and one sync at a time, across all libraries.
-It's single-user by design.
+libraries. A library is either an Apple Photos library or a plain folder. It runs at
+most one scan and one sync at a time, across all libraries. It's single-user by design.
 
 ```text
 Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──> /nas (read-only)
+                     │
+                     ├───────> folder_library.py ──────────> /nas (read-only)
                      │
                      ├───────> folders.py  (lists folders to find the library)
                      │
@@ -23,8 +25,9 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
 | --- | --- |
 | `config.py` | Reads environment variables |
 | `timezones.py` | The time zone chosen in Settings, used for the log and the page |
-| `folders.py` | Lists folders under the shared NAS folder, so the page can find the library |
+| `folders.py` | Lists folders under the shared NAS folder, and decides which can be chosen |
 | `library.py` | Turns the Photos database into `Item` and `Part` records |
+| `folder_library.py` | Turns a plain folder into the same `Item` and `Part` records |
 | `xmp.py` | Builds the sidecar that carries dates, GPS, captions, and tags |
 | `immich.py` | Immich API client, with retries for 429, 5xx, and network errors |
 | `state.py` | Remembers what was sent, so runs can resume and stay incremental |
@@ -64,3 +67,21 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
   with. A new library isn't put on a schedule until its first sync is started by hand.
 - **The schedule skips libraries that haven't changed.** It compares the modification
   time of `Photos.sqlite` with the one from the last sync that finished with no failures.
+  A folder has no database, so it uses a hash of each file's path, size, and modification
+  time instead. That means listing the whole folder at every check.
+- **A library's kind is saved, not worked out from its path.** Older versions could point
+  at a Photos library whose path doesn't end in `.photoslibrary`, and treating one as a
+  folder would upload its thumbnails. A saved library with no kind is a Photos library.
+- **Immigrate builds no sidecar for a folder's files.** Immich prefers a sidecar's dates
+  to the file's own, and a folder only knows when a file last changed, so a built sidecar
+  would replace real capture dates. Immich reads EXIF, then falls back to the file time
+  sent with the upload. A sidecar already beside a file is sent as it is.
+- **Live Photos in a folder aren't paired by name.** The video of a pair is hidden in
+  Immich, so a wrong match would make a real video disappear. Immich links the two itself
+  when both files carry the same content ID, as Apple's exports do.
+- **A folder's albums are off until asked for.** A dated folder tree could make hundreds
+  of albums, and Immigrate never deletes anything from Immich.
+- **Folder scans skip system folders and photo apps' libraries.** That covers hidden
+  folders, anything starting with `@`, NAS trash and snapshots, and `.photoslibrary`,
+  `.photolibrary`, and `.aplibrary` bundles, which are full of thumbnails. Symlinks aren't
+  followed, so a scan can't leave the shared folder.
