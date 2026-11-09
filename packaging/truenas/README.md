@@ -17,14 +17,36 @@ follows the catalog's `CONTRIBUTIONS.md` and recent community apps such as
 - `date_added` is `2026-11-09`.
 - The issue and PR text are in [`SUBMISSION.md`](SUBMISSION.md).
 
+## Tested with the catalog's scripts
+
+On 2026-11-09 the app was tested with the catalog's own scripts, in a read-only copy
+of `truenas/apps`, against the published 0.2.0 image. These all passed:
+
+- `check_metadata.py`: `app.yaml` and `item.yaml` match what `generate_metadata.py`
+  produces.
+- `ci.py` with `basic-values.yaml` and with `immich-values.yaml`: the app renders,
+  the permissions container finishes, and Immigrate starts and reports healthy.
+- `apps_dev_charts_validate validate`, which the catalog's PR checks also run.
+- `port_validation.py`: no duplicate ports, and `30560` belongs to Immigrate.
+
+The tests ran on an Apple Silicon Mac, so two things were changed in the copy only,
+never in this folder:
+
+- The validation image is amd64-only, and Docker's Rosetta emulation doesn't
+  support the `openat2` call the renderer uses to write files. A small fallback
+  replaced that one call with a plain open.
+- Docker Desktop can't mount `/opt/tests`, and port 8080 was in use, so the test
+  value files used a shared temporary folder and ports 18080 and 18081.
+
+On Linux, as in the catalog's CI, neither change is needed.
+
 ## When you submit
 
 1. Open the issue in `truenas/apps` with the App Request form, using the text in
    `SUBMISSION.md`.
 2. In a fork, copy `immigrate/` to `ix-dev/community/immigrate/` and run
    `devbox run copy-lib`.
-3. Test both value files. This app hasn't been rendered or deployed with their
-   scripts yet:
+3. Test both value files again, in case the catalog changed since:
    `./.github/scripts/ci.py --app immigrate --train community --test-file basic-values.yaml`,
    then the same with `immich-values.yaml`.
 4. Run `./.github/scripts/port_validation.py` again. If another app took `30560`,

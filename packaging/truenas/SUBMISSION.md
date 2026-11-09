@@ -59,10 +59,10 @@ changing the library. It can also send any other folder of photos.
 
 Tested locally with:
 
-- [ ] basic-values.yaml
-- [ ] immich-values.yaml
+- [x] basic-values.yaml
+- [x] immich-values.yaml
 
-*(Tick these after running `ci.py` with each file in the fork.)*
+All tests passed successfully. *(Run them again in the fork before you open the PR.)*
 
 ### Icons and Screenshots
 
@@ -88,10 +88,10 @@ Please upload the following to the CDN:
 
 ### Checklist
 
-- [ ] App runs successfully locally
+- [x] App runs successfully locally
 - [ ] Only modified files under /ix-dev/ or /library/
 - [x] README.md included
-- [ ] Multiple test scenarios tested
+- [x] Multiple test scenarios tested
 - [x] questions.yaml has clear descriptions and follows structure of existing apps
 - [ ] All automated CI checks pass
 
