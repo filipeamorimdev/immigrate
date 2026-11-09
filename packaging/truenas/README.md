@@ -6,36 +6,41 @@ in that repo, so it can be copied to `ix-dev/community/immigrate/` in a fork. It
 follows the catalog's `CONTRIBUTIONS.md` and recent community apps such as
 `stlquest` and `actual-budget`, and targets library 2.3.18.
 
-## What's left before submitting
+## Ready
 
-1. **Pin the 0.2.0 image.** The image pinned now is 0.1.0, which can't send a
-   folder. After the `v0.2.0` release, pin it in `ix_values.yaml` with its digest,
-   `0.2.0@sha256:...`, and set `app_version` in `app.yaml` to `0.2.0`.
-2. **Attach the icon and screenshots to the PR.** The icon is `icon.svg` in this
-   folder, with `icon.png` as a 512px copy. Screenshots are in `docs/images/`. A
-   reviewer uploads them to the TrueNAS CDN and gives you the URLs for `icon` and
-   `screenshots` in `app.yaml` and `item.yaml`. The icon URL in `app.yaml` is a
-   placeholder in their usual pattern.
+- The image is pinned to `0.2.0` by digest in `ix_values.yaml`, and `app_version`
+  is `0.2.0`.
+- `lib_version` is 2.3.18, the newest library in the catalog on 2026-11-09, and
+  `lib_version_hash` matches its `library/hashes.yaml`.
+- The default port is `30560`. The catalog's `port_validation.py` listed it as the
+  next free port on 2026-11-09, after `30553` was taken.
+- `date_added` is `2026-11-09`.
+- The issue and PR text are in [`SUBMISSION.md`](SUBMISSION.md).
 
 ## When you submit
 
-- Open an issue in `truenas/apps` first, as the PR template asks.
-- In the fork, run `devbox run copy-lib`, then test both value files:
-  `./.github/scripts/ci.py --app immigrate --train community --test-file basic-values.yaml`.
-  Also run `immich-values.yaml`. This draft hasn't been rendered or deployed with
-  their scripts yet.
-- Run `./.github/scripts/port_validation.py`. `30553` was the next free default
-  port when this was drafted. If another app took it, use the next free one it
-  prints.
-- Update `date_added` in `app.yaml` and `lib_version` to the newest library.
-  `copy-lib` updates `lib_version_hash`, and `generate_metadata.py` regenerates
-  `item.yaml`.
-- Tick the box in the PR template that says an LLM helped write it.
+1. Open the issue in `truenas/apps` with the App Request form, using the text in
+   `SUBMISSION.md`.
+2. In a fork, copy `immigrate/` to `ix-dev/community/immigrate/` and run
+   `devbox run copy-lib`.
+3. Test both value files. This app hasn't been rendered or deployed with their
+   scripts yet:
+   `./.github/scripts/ci.py --app immigrate --train community --test-file basic-values.yaml`,
+   then the same with `immich-values.yaml`.
+4. Run `./.github/scripts/port_validation.py` again. If another app took `30560`,
+   use the next free port it prints, and update `questions.yaml` and this README.
+5. If you submit on a later day, update `date_added`, and `lib_version` if a newer
+   library is out. Run `generate_metadata.py` to regenerate `item.yaml`.
+6. Open the PR with the App Addition template and the text in `SUBMISSION.md`.
+   Attach the icon (`icon.svg`, with `icon.png` as a 512px copy) and the
+   screenshots from `docs/images/`. A reviewer uploads them to the TrueNAS CDN and
+   gives you the URLs for `icon` and `screenshots` in `app.yaml` and `item.yaml`.
+   The icon URL in `app.yaml` is a placeholder in their usual pattern.
 
 ## How it differs from `compose.yaml`
 
 - **The port.** The catalog needs a default port that no other app uses, so it's
-  `30553`, not `8088`. The template sets `IMMIGRATE_PORT` to the chosen port, and
+  `30560`, not `8088`. The template sets `IMMIGRATE_PORT` to the chosen port, and
   the health check and the web UI link use it.
 - **The library folder must be a dataset, such as `/mnt/tank/photos`.** The
   catalog doesn't allow `/mnt` itself to be mounted. The folder is always mounted

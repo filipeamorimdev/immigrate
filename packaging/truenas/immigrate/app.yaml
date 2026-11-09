@@ -1,9 +1,9 @@
-app_version: 0.1.0
+app_version: 0.2.0
 capabilities: []
 categories:
 - media
 changelog_url: https://github.com/filipeamorimdev/immigrate/releases
-date_added: '2026-11-05'
+date_added: '2026-11-09'
 description: Immigrate syncs an Apple Photos library on your NAS into Immich, one
   way, without changing the library.
 home: https://github.com/filipeamorimdev/immigrate
