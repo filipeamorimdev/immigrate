@@ -12,6 +12,8 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
                      ├───────> folders.py  (lists folders to find the library)
                      │
                      ├───────> libraries.py (one per library: state, scan, choices)
+                     │       └──> check.py ──> metadata.py ──> exiftool
+                     │                └──────> immich.py (what Immich already has)
                      │
                      └───────> sync.py ──> immich.py ──HTTP──> Immich
                                   │
@@ -28,6 +30,9 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
 | `folders.py` | Lists folders under the shared NAS folder, and decides which can be chosen |
 | `library.py` | Turns the Photos database into `Item` and `Part` records |
 | `folder_library.py` | Turns a plain folder into the same `Item` and `Part` records |
+| `check.py` | After a read: checksums, copies, what Immich has, and missing dates and locations |
+| `metadata.py` | Reads dates and locations from files with exiftool |
+| `findings.py` | Shapes what the check found for the page, with location suggestions |
 | `xmp.py` | Builds the sidecar that carries dates, GPS, captions, and tags |
 | `immich.py` | Immich API client, with retries for 429, 5xx, and network errors |
 | `state.py` | Remembers what was sent, so runs can resume and stay incremental |
@@ -36,13 +41,28 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
 | `server.py` | HTTP API, the list of libraries, and the scheduled sync loop |
 | `static/` | Setup steps, libraries, and settings, in plain HTML, CSS, and JavaScript |
 
+## How a read and check work
+
+1. The read turns the library into a `Scan` and saves it as `scan.json.gz`.
+2. The check stats every file, and reads only those whose size or modification time
+   changed since the last check. It saves each file's SHA-1, and for a folder its date
+   and location, in the `files` table of `state.db`.
+3. Identical originals become copies of one kept item. The one with a sidecar, a
+   location, or albums is kept.
+4. When Immich is connected, `POST /assets/bulk-upload-check` says which checksums it
+   already has. The result is saved as `check.json.gz`, which belongs to one read.
+
 ## How a sync works
 
 1. `plan()` compares each item's fingerprint with `state.py`. It doesn't contact Immich.
 2. `Job.run_items()` uploads changed items in a thread pool. Each item goes in this order:
    Live Photo video, original, edit, RAW. The parts are then stacked with the edit first.
-3. `Job.run_albums()` adds any missing assets to each album. It never removes any.
-4. `verify()` lists what Immich holds and compares that with the library.
+   A file whose checksum Immich already has is linked instead of uploaded, unless it
+   changed since the check. Copies go after the items they copy.
+3. `Job.run_fixes()` sets the dates and locations the user chose with `PUT /assets`,
+   one call for each set of values. What was applied is recorded, so it's sent once.
+4. `Job.run_albums()` adds any missing assets to each album. It never removes any.
+5. `verify()` lists what Immich holds and compares that with the library.
 
 ## Decisions worth keeping
 
@@ -85,3 +105,11 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
   folders, anything starting with `@`, NAS trash and snapshots, and `.photoslibrary`,
   `.photolibrary`, and `.aplibrary` bundles, which are full of thumbnails. Symlinks aren't
   followed, so a scan can't leave the shared folder.
+- **The check runs after every read.** Start sync and the schedule read, check, then
+  sync, so a sync always knows what Immich has. Only changed files are read again.
+- **Dates and locations the user sets live in `state.db`, never in the library.** They're
+  applied with `PUT /assets`, which also works on assets Immigrate didn't upload. A date
+  is sent with its time zone offset, so Immich keeps that time zone, and Immich locks
+  the value so its own metadata extraction doesn't replace it.
+- **The page doesn't show photos.** It has no login, and browsers can't show HEIC or
+  RAW. Items already in Immich link to it, behind Immich's own login.

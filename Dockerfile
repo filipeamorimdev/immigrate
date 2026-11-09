@@ -7,6 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
     HOME=/data \
     TMPDIR=/data/tmp
 
+# exiftool reads the dates and locations in a folder's files, as Immich does.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libimage-exiftool-perl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /srv
 COPY requirements.lock pyproject.toml README.md ./
 COPY src ./src

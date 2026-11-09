@@ -2,7 +2,7 @@
 
 const SCHEDULES = [[0, "Off"], [15, "Every 15 minutes"], [60, "Every hour"], [360, "Every 6 hours"], [1440, "Every day"]];
 const EVERY = { 15: "every 15 minutes", 60: "every hour", 360: "every 6 hours", 1440: "once a day" };
-const RUNNING = ["queued", "uploading", "albums"];
+const RUNNING = ["queued", "uploading", "fixing", "albums"];
 const view = document.getElementById("view");
 let state = null;
 let identity = null;
@@ -30,6 +30,10 @@ let zoneError = "";
 const zoneSupport = {};
 const reports = {};
 const missing = {};
+const found = {}; // what each library's check found, from /findings
+// The page for setting dates and locations keeps these across refreshes.
+const fix = { library: null, filter: "location", open: new Set(), selected: new Set(), places: null,
+  place: null, draft: { name: "", coords: "", date: "" }, error: "", notice: "", busy: false };
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -258,12 +262,17 @@ function renderWizardRead(library) {
   const { running, done, total, error, summary } = library.scan;
   const leave = setupDone() ? `<button class="button" data-action="cancel">Cancel</button>` : "";
   if (running) {
+    const checking = library.scan.phase !== "reading";
     const opening = library.kind === "folder"
       ? "Looking through the folder. Large folders can take a few minutes."
       : "Opening the Photos database. Large libraries can take a few minutes.";
-    const found = done ? `${plural(done, "item")} found so far.` : opening;
-    return `<h2>Reading ${escapeHtml(library.name)}</h2>
-      <p class="lead">${total ? `${count(done)} of ${count(total)} items read.` : found}</p>`;
+    const line = checking ? progressLine(library)
+      : total ? `${count(done)} of ${count(total)} items read.`
+      : done ? `${plural(done, "item")} found so far.` : opening;
+    const after = checking ? "The first check reads every file, so it can take a while. Later checks only read what changed." : "";
+    return `<h2>${checking ? "Checking" : "Reading"} ${escapeHtml(library.name)}</h2>
+      <p class="lead">${line} ${after}</p>
+      ${checking ? `<div class="actions"><button class="button" data-action="stop">Stop</button></div>` : ""}`;
   }
   if (!summary) {
     return `<h2>Read ${escapeHtml(library.name)}</h2>
@@ -280,6 +289,7 @@ function renderWizardRead(library) {
     <p class="lead">Read ${when(summary.scannedAt)}.${before}</p>
     ${empty ? `<div class="note"><p>There are no photos or videos in this folder. A Photos library inside it has to be added on its own.</p></div>` : renderSummary(summary, library.kind)}
     ${renderMissing(library)}
+    ${empty ? "" : renderFindings(library)}
     ${errorLine(formError)}
     <div class="actions">
       ${empty ? "" : `<a class="button primary" href="#/add/${library.id}/choose">Choose what to send</a>`}
@@ -325,6 +335,152 @@ function renderMissing(library) {
       ${more}</details>` : ""}`;
 }
 
+function immichLink(assetId) {
+  if (!assetId || !state.immichUrl) return "";
+  const base = state.immichUrl.replace(/\/+$/, "");
+  return `<a href="${escapeHtml(base)}/photos/${encodeURIComponent(assetId)}" target="_blank" rel="noopener">Open in Immich</a>`;
+}
+
+const hasPlace = (gap) => gap.fix?.latitude != null && gap.fix?.longitude != null;
+
+function gapCounts(data) {
+  const dates = data.gaps.filter((g) => g.missingDate);
+  const places = data.gaps.filter((g) => g.missingLocation);
+  return { date: dates.length, location: places.length,
+    dateSet: dates.filter((g) => g.fix?.date).length, locationSet: places.filter(hasPlace).length };
+}
+
+function renderFindings(library) {
+  const { check, checkError, running } = library.scan;
+  if (running) return "";
+  const again = `<button class="button" data-action="check">Check again</button>`;
+  if (checkError) {
+    return `<h3 class="section">Duplicates and missing details</h3>
+      <div class="note bad"><p>${escapeHtml(checkError)}</p></div><div class="actions">${again}</div>`;
+  }
+  if (!check) {
+    return `<h3 class="section">Duplicates and missing details</h3>
+      <p class="lead">This library hasn't been checked for duplicates, or for missing dates and locations.</p>
+      <div class="actions"><button class="button" data-action="check">Check library</button></div>`;
+  }
+  const data = found[library.id]?.data;
+  if (!data) return `<h3 class="section">Duplicates and missing details</h3><p class="lead">Loading…</p>`;
+  const folder = library.kind === "folder";
+  const counts = gapCounts(data);
+  const notes = [];
+  if (!check.complete) notes.push("The check stopped before it finished, so these numbers are incomplete. Choose Check again to finish it. Files already read aren't read again.");
+  if (folder && !check.detailsRead) notes.push("Dates and locations weren't checked, because exiftool isn't installed where Immigrate runs.");
+  if (!check.immichAsked) notes.push("Immich wasn't asked which items it already has. Connect to Immich, then choose Check again.");
+  if (check.trashed) notes.push(`${plural(check.trashed, "file Immich already has is", "files Immich already has are")} in its trash. Restore them in Immich if you want them back in the timeline.`);
+  if (check.unreadable) notes.push(`${plural(check.unreadable, "file")} couldn't be read: ${check.unreadableFiles.map(escapeHtml).join(", ")}${check.unreadable > check.unreadableFiles.length ? ", and more" : ""}.`);
+  const copies = data.copies.length ? `<details><summary>Copies (${count(check.copies)})</summary>
+      <table><thead><tr><th>Kept</th><th>Copies of it</th></tr></thead><tbody>
+      ${data.copies.map((group) => `<tr><td class="path">${escapeHtml(group.keeper)}</td><td class="path">${group.copies.map(escapeHtml).join("<br>")}</td></tr>`).join("")}
+      </tbody></table>${data.copyGroups > data.copies.length ? `<p>And ${plural(data.copyGroups - data.copies.length, "more file")}.</p>` : ""}</details>` : "";
+  const existing = data.existing.length ? `<details><summary>Already in Immich (${count(data.existingCount)})</summary>
+      <table><tbody>${data.existing.map((item) => `<tr><td class="path">${escapeHtml(item.filename)}${item.trashed ? "<br><small>In Immich's trash</small>" : ""}</td><td>${immichLink(item.assetId)}</td></tr>`).join("")}</tbody></table>
+      ${data.existingCount > data.existing.length ? `<p>And ${plural(data.existingCount - data.existing.length, "more item")}.</p>` : ""}</details>` : "";
+  const section = page()[0] === "add" ? "add" : "library";
+  const fixButton = counts.date || counts.location
+    ? `<a class="button" href="#/${section}/${library.id}/fix">Set dates and locations</a>` : "";
+  return `<h3 class="section">Duplicates and missing details</h3>
+    <p class="lead">Checked ${when(check.checkedAt)}.</p>
+    <div class="figures">
+      ${figure(count(check.copies), "copies")}
+      ${figure(count(data.existingCount), "already in Immich")}
+      ${folder ? figure(count(counts.date), "without a date") : ""}
+      ${figure(count(counts.location), "without a location")}
+    </div>
+    ${notes.length ? `<div class="note">${notes.map((n) => `<p>${n}</p>`).join("")}</div>` : ""}
+    ${copies}${existing}
+    <div class="actions">${fixButton}${again}</div>`;
+}
+
+function gapStatus(gap, filter) {
+  if (filter === "date") {
+    if (gap.fix?.date) return `Set to ${when(gap.fix.date)}${gap.applied ? ". In Immich" : ""}`;
+    return `Immich uses the file's time, ${when(gap.date)}`;
+  }
+  if (hasPlace(gap)) {
+    const where = gap.fix.place || `${gap.fix.latitude.toFixed(4)}, ${gap.fix.longitude.toFixed(4)}`;
+    return `Set to ${escapeHtml(where)}${gap.applied ? ". In Immich" : ""}`;
+  }
+  const hint = gap.suggestion;
+  if (!hint) return "No location";
+  const apart = hint.minutes < 1 ? "taken at the same time" : hint.minutes < 120 ? `${count(hint.minutes)} min apart` : `${count(Math.round(hint.minutes / 60))} h apart`;
+  return `<button class="link" data-suggest="${escapeHtml(gap.uuid)}">Use the location of ${escapeHtml(hint.from)}</button> (${apart})`;
+}
+
+function renderFix(library, section) {
+  const back = `<p><a class="back" href="#/${section}/${library.id}">${escapeHtml(library.name)}</a></p>`;
+  const where = library.kind === "folder" ? "folder" : "library";
+  const head = `${back}<h2>Dates and locations</h2>
+    <p class="lead">Set what's missing. Immigrate sets it in Immich when it sends an item, or on the next sync if the item is already there. Nothing in the ${where} changes.</p>`;
+  const data = found[library.id]?.data;
+  if (!data) return `${head}<p class="lead">Loading…</p>`;
+  const counts = gapCounts(data);
+  if (fix.library !== library.id) {
+    Object.assign(fix, { library: library.id, filter: counts.location || !counts.date ? "location" : "date",
+      open: new Set(), selected: new Set(), places: null, place: null, error: "", notice: "" });
+  }
+  const filter = fix.filter;
+  const gaps = data.gaps.filter((g) => (filter === "date" ? g.missingDate : g.missingLocation));
+  const tabs = library.kind === "folder" ? `<div class="segmented" role="group" aria-label="Show">
+      <button class="button" data-fix-filter="location" aria-pressed="${filter === "location"}">Without a location (${count(counts.location)})</button>
+      <button class="button" data-fix-filter="date" aria-pressed="${filter === "date"}">Without a date (${count(counts.date)})</button>
+    </div>` : "";
+  if (!gaps.length) return `${head}${tabs}<p class="lead">Nothing is missing a ${filter === "date" ? "date" : "location"}.</p>`;
+
+  const groups = new Map();
+  for (const gap of gaps) {
+    if (!groups.has(gap.group)) groups.set(gap.group, []);
+    groups.get(gap.group).push(gap);
+  }
+  const isSet = (gap) => (filter === "date" ? !!gap.fix?.date : hasPlace(gap));
+  const rows = [...groups].map(([name, items]) => {
+    const open = fix.open.has(name);
+    const all = items.every((g) => fix.selected.has(g.uuid));
+    const label = name || (library.kind === "folder" ? "Top folder" : "No date");
+    const title = library.kind === "folder" ? escapeHtml(label) : new Date(`${name}T12:00:00`).toLocaleDateString([], { dateStyle: "medium" });
+    const list = open ? `<ul class="gap-items">${items.map((gap) => `<li class="gap">
+        <input type="checkbox" data-select="${escapeHtml(gap.uuid)}" aria-label="Select ${escapeHtml(gap.filename)}" ${fix.selected.has(gap.uuid) ? "checked" : ""}>
+        <span>${escapeHtml(gap.where)}</span>
+        <span class="detail"><small>${gapStatus(gap, filter)}</small>${immichLink(gap.assetId)}</span>
+      </li>`).join("")}</ul>` : "";
+    return `<li><div class="gap-group">
+        <input type="checkbox" data-select-group="${escapeHtml(name)}" aria-label="Select everything in ${escapeHtml(label)}" ${all ? "checked" : ""}>
+        <button class="folder" data-open-group="${escapeHtml(name)}" aria-expanded="${open}">${title}<small>${plural(items.length, "item")}, ${count(items.filter(isSet).length)} set</small></button>
+      </div>${list}</li>`;
+  }).join("");
+
+  const selected = fix.selected.size;
+  const chosen = fix.place ? `<p>Chosen: ${escapeHtml(fix.place.name || "Coordinates")}${fix.place.region ? `, ${escapeHtml(fix.place.region)}` : ""} (${fix.place.latitude.toFixed(4)}, ${fix.place.longitude.toFixed(4)})</p>` : "";
+  const results = fix.places ? (fix.places.length ? `<ul class="places">${fix.places.map((place, i) => `<li><button class="link" data-place-index="${i}">${escapeHtml(place.name)}</button>${place.region ? ` <small>${escapeHtml(place.region)}</small>` : ""}</li>`).join("")}</ul>`
+    : `<p class="muted">Immich doesn't know a place by that name.</p>`) : "";
+  const form = filter === "date"
+    ? `<label class="field">Date and time<small>In ${escapeHtml(state.timeZone)}, the time zone chosen in Settings.</small>
+        <input id="fix-date" type="datetime-local" step="1" value="${escapeHtml(fix.draft.date)}"></label>
+      <div class="actions"><button class="button primary" data-action="fix-set-date" ${selected && fix.draft.date && !fix.busy ? "" : "disabled"}>Set date</button>
+        <button class="button" data-action="fix-clear-date" ${selected && !fix.busy ? "" : "disabled"}>Clear date</button></div>`
+    : `<label class="field" for="fix-place">Place<small>Search the places Immich knows, or paste coordinates such as 38.7223, -9.1393.</small></label>
+      <div class="inline"><input id="fix-place" type="text" autocomplete="off" value="${escapeHtml(fix.draft.name)}">
+        <button class="button" data-action="fix-search" ${fix.busy ? "disabled" : ""}>Search</button></div>
+      ${results}${chosen}
+      <div class="actions"><button class="button primary" data-action="fix-set-location" ${selected && fix.place && !fix.busy ? "" : "disabled"}>Set location</button>
+        <button class="button" data-action="fix-clear-location" ${selected && !fix.busy ? "" : "disabled"}>Clear location</button></div>`;
+  return `${head}${tabs}
+    <p class="lead">${plural(gaps.length, "item")} in ${plural(groups.size, library.kind === "folder" ? "folder" : "day")}, ${count(gaps.filter(isSet).length)} set. Open a ${library.kind === "folder" ? "folder" : "day"} to see its items.</p>
+    <ul class="gaps">${rows}</ul>
+    <div class="fix-panel">
+      <p><strong>${plural(selected, "item")} selected</strong>
+        <button class="link" data-fix-select="all">Select all ${count(gaps.length)}</button>
+        ${selected ? `<button class="link" data-fix-select="none">Clear selection</button>` : ""}</p>
+      ${form}
+      ${errorLine(fix.error)}
+      ${fix.notice ? `<p class="status good">${escapeHtml(fix.notice)}</p>` : ""}
+    </div>`;
+}
+
 function radio(values, name, value, title, detail) {
   return `<label class="choice"><input type="radio" name="${name}" value="${value}" ${values.options[name] === value ? "checked" : ""}>
     <span>${title}</span><small>${detail}</small></label>`;
@@ -343,12 +499,24 @@ function renderSchedule(values, thing) {
       </fieldset>`;
 }
 
+function renderDuplicates(values) {
+  return `<fieldset><legend>Copies inside the library</legend>
+        ${radio(values, "copies", "include", "Add copies to their albums too", "Immich keeps one copy of identical files either way.")}
+        ${radio(values, "copies", "skip", "Leave copies out", "Only the first copy of each file is looked at.")}
+      </fieldset>
+      <fieldset><legend>Already in Immich</legend>
+        ${radio(values, "existing", "link", "Link them", "They're added to albums and favorites, and get the dates and locations you set, without uploading them again.")}
+        ${radio(values, "existing", "skip", "Leave them as they are", "Immigrate doesn't send or change them.")}
+      </fieldset>`;
+}
+
 function renderChoices(values, kind) {
   if (kind === "folder") {
     return `<form id="choices">
         <fieldset><legend>Organization</legend>
           ${checkbox(values, "albums", "Make an album from each folder", "Albums get names like Photos/Trips/Lisbon. Immigrate never removes albums, so leave this off if you have a lot of folders.")}
         </fieldset>
+        ${renderDuplicates(values)}
         ${renderSchedule(values, "folder")}
       </form>`;
   }
@@ -365,6 +533,7 @@ function renderChoices(values, kind) {
         ${checkbox(values, "albums", "Recreate albums", "Albums in folders become names like Trips/Lisbon.")}
         ${checkbox(values, "people_as_tags", "Add people as tags", "Names become tags such as People/Ana. Immich still finds faces on its own.")}
       </fieldset>
+      ${renderDuplicates(values)}
       ${renderSchedule(values, "library")}
     </form>`;
 }
@@ -376,7 +545,8 @@ function readChoices(base) {
   const chosen = (name, value) => form.elements[name] ? value : base.options[name];
   return {
     options: { ...base.options, edits: chosen("edits", data.get("edits")), hidden: chosen("hidden", data.get("hidden")),
-      albums: data.has("albums"), people_as_tags: chosen("people_as_tags", data.has("people_as_tags")) },
+      albums: data.has("albums"), people_as_tags: chosen("people_as_tags", data.has("people_as_tags")),
+      copies: chosen("copies", data.get("copies")), existing: chosen("existing", data.get("existing")) },
     autoMinutes: Number(data.get("autoMinutes")),
   };
 }
@@ -402,6 +572,7 @@ function renderWizardChoose(library) {
       ${figure(count(result.new + result.changed + result.retry), "to send")}
       ${figure(bytes(result.bytes), "to upload")}
       ${figure(count(result.unchanged), "already sent")}
+      ${figure(count(result.linked), "found in Immich")}
       ${figure(count(result.newAlbums), "new albums")}
     </div>
     <p class="lead">Immich needs extra space for thumbnails and transcoded videos on top of this.</p>` : "";
@@ -416,28 +587,36 @@ function renderWizardChoose(library) {
 }
 
 const PHASES = {
-  queued: "Starting", uploading: "Sending photos", albums: "Building albums",
+  queued: "Starting", uploading: "Sending photos", fixing: "Setting dates and locations", albums: "Building albums",
   finished: "Last synced", stopped: "Last sync stopped", failed: "Last sync stopped early",
 };
 
 function statusLine(library) {
   const job = library.job;
   if (isRunning(job)) {
-    return job.phase === "albums"
-      ? `Building albums: ${count(job.albumsDone)} of ${count(job.albumsTotal)}.`
-      : `Sending: ${count(job.total - job.waiting)} of ${count(job.total)} items checked, ${count(job.done)} sent.`;
+    if (job.phase === "albums") return `Building albums: ${count(job.albumsDone)} of ${count(job.albumsTotal)}.`;
+    if (job.phase === "fixing") return `Setting dates and locations: ${count(job.fixesDone)} of ${count(job.fixesTotal)} items.`;
+    return `Sending: ${count(job.total - job.waiting)} of ${count(job.total)} items checked, ${count(job.done)} sent.`;
   }
-  const { running, done, total } = library.scan;
-  if (running) {
-    if (total) return `Reading the library: ${count(done)} of ${count(total)} items.`;
-    return done ? `Reading the library: ${plural(done, "item")} found so far.` : "Reading the library.";
-  }
+  if (library.scan.running) return progressLine(library);
   if (library.queued) return "Starting the sync.";
   const last = library.lastSync;
   if (!last) return library.scan.summary ? "Read, but not synced yet." : "Not synced yet.";
   const date = last.finishedAt ? ` ${when(last.finishedAt)}` : "";
   const failed = last.failed ? `, ${count(last.failed)} failed` : "";
   return `${PHASES[last.phase]}${date}: ${count(last.done)} sent, ${count(last.skipped)} already in Immich${failed}.`;
+}
+
+// What a read or check is doing now, in one sentence.
+function progressLine(library) {
+  const { phase, done, total } = library.scan;
+  if (phase === "checksums") {
+    return total ? `Checking for duplicates: ${bytes(done)} of ${bytes(total)} read.` : "Checking for duplicates.";
+  }
+  if (phase === "details") return `Checking dates and locations: ${count(done)} of ${count(total)} files.`;
+  if (phase === "immich") return "Asking Immich which items it already has.";
+  if (total) return `Reading the library: ${count(done)} of ${count(total)} items.`;
+  return done ? `Reading the library: ${plural(done, "item")} found so far.` : "Reading the library.";
 }
 
 function scheduleLine(library) {
@@ -558,7 +737,7 @@ function renderLibrary(library) {
     ${renderCheck(library)}
     ${summary ? `<h3 class="section">In the library</h3>
       <p class="lead">${plural(summary.total, "item")}, read ${when(summary.scannedAt)}.</p>
-      ${renderSummary(summary, library.kind)}${renderMissing(library)}` : ""}
+      ${renderSummary(summary, library.kind)}${renderMissing(library)}${renderFindings(library)}` : ""}
     <h3 class="section">Settings for this library</h3>
     <p class="lead">Every sync of ${escapeHtml(library.name)} uses these, by hand or on the schedule. Libraries you add later start from the defaults in <a href="#/settings">Settings</a>.</p>
     ${renderChoices(values, library.kind)}
@@ -603,8 +782,11 @@ function renderPage(current) {
     case "connect": return renderSetupConnect();
     case "add":
       if (!library) return renderWizardLibrary();
+      if (current[2] === "fix") return renderFix(library, "add");
       return current[2] === "choose" && library.scan.summary ? renderWizardChoose(library) : renderWizardRead(library);
-    case "library": return library ? renderLibrary(library) : renderDashboard();
+    case "library":
+      if (library && current[2] === "fix") return renderFix(library, "library");
+      return library ? renderLibrary(library) : renderDashboard();
     case "settings": return renderSettings();
     default: return renderDashboard();
   }
@@ -690,8 +872,76 @@ async function saveTimeZone(select) {
   await tick();
 }
 
+// Findings change when the library is checked again and after each sync.
+const findingsKey = (library) => `${library.scan.check?.checkedAt}|${library.lastSync?.finishedAt}`;
+
+async function loadFindings(library) {
+  const key = findingsKey(library);
+  found[library.id] = { ...found[library.id], for: key };
+  try {
+    found[library.id] = { for: key, data: await api(`/api/libraries/${library.id}/findings`) };
+  } catch {
+    found[library.id] = { for: null, data: found[library.id]?.data };
+    return;
+  }
+  render();
+}
+
+async function saveFix(library, body) {
+  fix.error = fix.notice = "";
+  fix.busy = true;
+  render();
+  try {
+    const result = await api(`/api/libraries/${library.id}/fixes`, body);
+    fix.notice = `Saved for ${plural(result.saved, "item")}. ${isSetUp(library) ? "Start sync to set it in Immich." : "It's set in Immich when the items are sent."}`;
+    fix.selected.clear();
+    await loadFindings(library);
+  } catch (error) {
+    fix.error = error.message;
+  }
+  fix.busy = false;
+  render();
+}
+
+function parseCoordinates(text) {
+  const match = text.trim().match(/^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const [latitude, longitude] = [Number(match[1]), Number(match[2])];
+  return Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 ? { name: "", region: "", latitude, longitude } : null;
+}
+
+async function searchPlaces() {
+  fix.error = "";
+  const typed = fix.draft.name.trim();
+  const coordinates = parseCoordinates(typed);
+  if (coordinates) {
+    fix.place = coordinates;
+    fix.places = null;
+    return;
+  }
+  fix.busy = true;
+  render();
+  try {
+    fix.places = await api(`/api/places?name=${encodeURIComponent(typed)}`);
+    fix.place = null;
+  } catch (error) {
+    fix.error = error.message;
+  }
+  fix.busy = false;
+}
+
+// The items the fix page is showing now.
+function shownGaps(library) {
+  const data = found[library.id]?.data;
+  if (!data) return [];
+  return data.gaps.filter((g) => (fix.filter === "date" ? g.missingDate : g.missingLocation));
+}
+
 function loadPageData(current) {
   const library = currentLibrary();
+  if (library?.scan.check && !library.scan.running && found[library.id]?.for !== findingsKey(library)) {
+    loadFindings(library);
+  }
   if (current[0] === "settings" && !timeZones && !timeZonesLoading) loadTimeZones();
   if (current[0] === "add" && !library && !folders && !foldersLoading) loadFolders();
   const wantsPreview = current[0] === "library" || current[2] === "choose";
@@ -724,6 +974,15 @@ async function act(name, button) {
     if (name === "sync") await api(`/api/libraries/${button.dataset.id || library.id}/sync`, { read: true });
     if (name === "stop") await api("/api/stop", {});
     if (name === "verify") reports[library.id] = await api(`/api/libraries/${library.id}/verify`, {});
+    if (name === "check") await api(`/api/libraries/${library.id}/check`, {});
+    if (name === "fix-search") await searchPlaces();
+    if (name === "fix-set-location") {
+      const { latitude, longitude, name: place, region } = fix.place;
+      await saveFix(library, { uuids: [...fix.selected], latitude, longitude, place: [place, region].filter(Boolean).join(", ") });
+    }
+    if (name === "fix-clear-location") await saveFix(library, { uuids: [...fix.selected], clear: "location" });
+    if (name === "fix-set-date") await saveFix(library, { uuids: [...fix.selected], date: fix.draft.date });
+    if (name === "fix-clear-date") await saveFix(library, { uuids: [...fix.selected], clear: "date" });
     if (name === "back") await leaveSetup(library, "#/add");
     if (name === "cancel") await leaveSetup(library, "#/libraries");
     if (name === "start") {
@@ -772,20 +1031,74 @@ document.addEventListener("click", async (event) => {
     await tick();
     return;
   }
+  const library = currentLibrary();
+  const group = event.target.closest("[data-open-group]");
+  if (group) {
+    const name = group.dataset.openGroup;
+    if (fix.open.has(name)) fix.open.delete(name);
+    else fix.open.add(name);
+    render();
+    return;
+  }
+  const filter = event.target.closest("[data-fix-filter]");
+  if (filter) {
+    Object.assign(fix, { filter: filter.dataset.fixFilter, selected: new Set(), open: new Set(), error: "", notice: "" });
+    render();
+    return;
+  }
+  const select = event.target.closest("[data-fix-select]");
+  if (select && library) {
+    fix.selected = select.dataset.fixSelect === "all" ? new Set(shownGaps(library).map((g) => g.uuid)) : new Set();
+    render();
+    return;
+  }
+  const place = event.target.closest("[data-place-index]");
+  if (place) {
+    fix.place = fix.places[Number(place.dataset.placeIndex)];
+    render();
+    return;
+  }
+  const suggest = event.target.closest("[data-suggest]");
+  if (suggest && library) {
+    const gap = shownGaps(library).find((g) => g.uuid === suggest.dataset.suggest);
+    const hint = gap?.suggestion;
+    if (hint) await saveFix(library, { uuids: [gap.uuid], latitude: hint.latitude, longitude: hint.longitude, place: `the location of ${hint.from}` });
+    return;
+  }
   const action = event.target.closest("[data-action]");
   if (action) act(action.dataset.action, action);
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "fix-place") fix.draft.name = event.target.value;
+  if (event.target.id === "fix-date") fix.draft.date = event.target.value;
   if (event.target.id === "url") draftUrl = event.target.value;
   if (event.target.id === "key") draftKey = event.target.value;
 });
 
 document.addEventListener("change", async (event) => {
   if (event.target.id === "timeZone") { await saveTimeZone(event.target); return; }
+  const library = currentLibrary();
+  if (event.target.dataset.select !== undefined) {
+    if (event.target.checked) fix.selected.add(event.target.dataset.select);
+    else fix.selected.delete(event.target.dataset.select);
+    event.target.blur();
+    render();
+    return;
+  }
+  if (event.target.dataset.selectGroup !== undefined && library) {
+    const items = shownGaps(library).filter((g) => g.group === event.target.dataset.selectGroup);
+    for (const gap of items) {
+      if (event.target.checked) fix.selected.add(gap.uuid);
+      else fix.selected.delete(gap.uuid);
+    }
+    event.target.blur();
+    render();
+    return;
+  }
+  if (event.target.id === "fix-date") { event.target.blur(); render(); return; }
   if (!event.target.closest("#choices")) return;
   const current = page();
-  const library = currentLibrary();
   const saved = current[0] === "settings" ? state.defaults
     : current[0] === "add" ? wizardChoices(library) : library;
   draft = { values: readChoices(saved) };
@@ -795,6 +1108,13 @@ document.addEventListener("change", async (event) => {
     await refreshPreview(library, draft.values.options);
   } else {
     render();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && event.target.id === "fix-place") {
+    event.preventDefault();
+    act("fix-search");
   }
 });
 

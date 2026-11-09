@@ -8,9 +8,11 @@ import os
 import re
 import threading
 import uuid
+from datetime import datetime
 from email.parser import BytesParser
 from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 VISIBILITY = {"archive", "timeline", "hidden", "locked"}
@@ -86,6 +88,32 @@ ASSET_EXTENSIONS = {
     ".webm",
     ".wmv",
 }
+BULK_UPDATE_FIELDS = {
+    "ids",
+    "dateTimeOriginal",
+    "dateTimeRelative",
+    "description",
+    "duplicateId",
+    "isFavorite",
+    "latitude",
+    "longitude",
+    "rating",
+    "timeZone",
+    "visibility",
+}
+SHA1 = re.compile(r"^[0-9a-f]{40}$")
+# A few places, in the shape of PlacesResponseDto.
+PLACES = [
+    {
+        "name": "Lisbon",
+        "admin1name": "Lisbon",
+        "admin2name": "Lisboa",
+        "latitude": 38.71667,
+        "longitude": -9.13333,
+    },
+    {"name": "Lisbon Falls", "admin1name": "Maine", "latitude": 44.00619, "longitude": -70.06033},
+    {"name": "Porto", "admin1name": "Porto", "latitude": 41.14961, "longitude": -8.61099},
+]
 UPLOAD_FIELDS = {
     "assetData",
     "sidecarData",
@@ -107,6 +135,8 @@ class Store:
         self.calls, self.violations = [], []
         self.fail_uploads = 0  # next N uploads return 500
         self.fail_filenames = set()  # these always return 500
+        self.trashed = set()  # asset IDs in Immich's trash
+        self.updates = []  # bodies of PUT /assets
         self.lock = threading.Lock()
         self.key = "test-key"
 
@@ -175,6 +205,18 @@ def make_handler(store: Store):
                 return self.reply(200, results)
             if path == "/api/search/metadata":
                 return self.search(json.loads(raw))
+            if path == "/api/assets/bulk-upload-check" and self.command == "POST":
+                return self.bulk_check(json.loads(raw))
+            if path == "/api/assets" and self.command == "PUT":
+                return self.bulk_update(json.loads(raw))
+            if path == "/api/search/places" and self.command == "GET":
+                query = parse_qs(urlparse(self.path).query)
+                name = (query.get("name") or [""])[0]
+                if not name:
+                    return self.bad("name required")
+                return self.reply(
+                    200, [p for p in PLACES if p["name"].lower().startswith(name.lower())]
+                )
             if match := re.fullmatch(r"/api/assets/([^/]+)", path):
                 asset = store.assets.get(match[1])
                 if not asset or self.command != "PUT":
@@ -194,6 +236,52 @@ def make_handler(store: Store):
                 asset.update(body)
                 return self.reply(200, {k: v for k, v in asset.items() if k != "sidecar"})
             self.reply(404, {"message": f"no route {path}"})
+
+        def bulk_check(self, body):
+            assets = body.get("assets")
+            if not isinstance(assets, list) or set(body) != {"assets"}:
+                return self.bad("assets list required")
+            results = []
+            for asset in assets:
+                if set(asset) != {"id", "checksum"} or not SHA1.match(asset["checksum"]):
+                    return self.bad(f"bad bulk check item {asset}")
+                found = store.by_checksum.get(asset["checksum"])
+                if found:
+                    results.append(
+                        {
+                            "id": asset["id"],
+                            "action": "reject",
+                            "reason": "duplicate",
+                            "assetId": found,
+                            "isTrashed": found in store.trashed,
+                        }
+                    )
+                else:
+                    results.append({"id": asset["id"], "action": "accept"})
+            return self.reply(200, {"results": results})
+
+        def bulk_update(self, body):
+            if set(body) - BULK_UPDATE_FIELDS or not body.get("ids"):
+                return self.bad(f"bad bulk update {body}")
+            if any(i not in store.assets for i in body["ids"]):
+                return self.bad("unknown asset id")
+            if "dateTimeOriginal" in body:
+                try:
+                    datetime.fromisoformat(body["dateTimeOriginal"])
+                except (TypeError, ValueError):
+                    return self.bad("dateTimeOriginal must be a date")
+            if (
+                not -90 <= body.get("latitude", 0) <= 90
+                or not -180 <= body.get("longitude", 0) <= 180
+            ):
+                return self.bad("location out of range")
+            store.updates.append(body)
+            for asset_id in body["ids"]:
+                store.assets[asset_id].update({k: v for k, v in body.items() if k != "ids"})
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
 
         def album_dto(self, album):
             # v3 removed `assets` from album responses.

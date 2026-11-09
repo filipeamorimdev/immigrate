@@ -8,9 +8,10 @@ import os
 import shutil
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -22,6 +23,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__, timezones
 from .config import Config
+from .findings import findings
 from .folders import FOLDER, PHOTOS, FolderError, display_path, list_folders, source_at
 from .immich import Immich, ImmichError
 from .libraries import Library, library_id, migrate_single_library
@@ -45,6 +47,42 @@ def parse_minutes(value: Any) -> int:
     if minutes not in ALLOWED_AUTO_MINUTES:
         raise HTTPException(422, "Choose off, 15 minutes, 1 hour, 6 hours, or 1 day.")
     return minutes
+
+
+def parse_fix(body: dict[str, Any]) -> dict[str, Any]:
+    """Turn what the fix form sent into values for `State.save_fixes`."""
+    values: dict[str, Any] = {}
+    clear = body.get("clear")
+    if clear in ("date", "all"):
+        values["date"] = None
+    if clear in ("location", "all"):
+        values.update(latitude=None, longitude=None, place=None)
+    if date := body.get("date"):
+        try:
+            moment = datetime.fromisoformat(str(date))
+        except ValueError as exc:
+            raise HTTPException(422, "Enter a date and time.") from exc
+        if moment.tzinfo is None:
+            # Typed in the time zone chosen in Settings.
+            moment = moment.replace(tzinfo=timezones.current())
+        if not 1800 <= moment.year <= timezones.now().year + 1:
+            raise HTTPException(422, "Enter a date between 1800 and next year.")
+        values["date"] = moment.isoformat(timespec="seconds")
+    latitude, longitude = body.get("latitude"), body.get("longitude")
+    if latitude is not None or longitude is not None:
+        if latitude is None or longitude is None:
+            raise HTTPException(422, "Enter both a latitude and a longitude.")
+        try:
+            latitude, longitude = float(latitude), float(longitude)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, "Enter both a latitude and a longitude.") from exc
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            raise HTTPException(422, "That location is off the map. Check the numbers.")
+        values.update(latitude=latitude, longitude=longitude)
+        values["place"] = str(body.get("place") or "")[:200] or None
+    if not values:
+        raise HTTPException(422, "Set a date or a location, or choose what to clear.")
+    return values
 
 
 def parse_options(value: Any) -> Options:
@@ -130,6 +168,16 @@ class Runtime:
     def immich(self) -> Immich:
         self.require_connection()
         return Immich(self.settings["url"], self.settings["key"])
+
+    def connector(self) -> Callable[[], Immich | None]:
+        """Connect when a check needs Immich. Without a connection, Immich isn't asked."""
+
+        def connect() -> Immich | None:
+            if not self.settings.get("url") or not self.settings.get("key"):
+                return None
+            return Immich(self.settings["url"], self.settings["key"])
+
+        return connect
 
     def library(self, library_id: str) -> Library:
         library = self.libraries.get(library_id)
@@ -217,7 +265,26 @@ class Runtime:
                 raise HTTPException(409, f"Wait for {other.name} to finish reading.")
             if self.syncing() is library:
                 raise HTTPException(409, "Wait for the sync to finish.")
-            return library.start_read()
+            return library.start_read(self.connector())
+
+    def start_check(self, library: Library) -> None:
+        if library.scan is None:
+            raise HTTPException(409, "Read the library first.")
+        with self.lock:
+            if library.scan_running:
+                return
+            if other := self.reading():
+                raise HTTPException(409, f"Wait for {other.name} to finish reading.")
+            if self.syncing() is library:
+                raise HTTPException(409, "Wait for the sync to finish.")
+            library.start_check(self.connector())
+
+    def stop(self) -> None:
+        if self.job:
+            self.job.stop_event.set()
+        for library in self.libraries.values():
+            if library.scan_running:
+                library.stop_event.set()
 
     def start_job(self, library: Library) -> None:
         if library.scan is None:
@@ -230,7 +297,7 @@ class Runtime:
             if library.scan_running:
                 raise HTTPException(409, "Wait for the library read to finish.")
             client = self.immich()
-            job = Job(library.scan, library.state, client, library.options)
+            job = Job(library.scan, library.state, client, library.options, library.check)
             scan_mtime = library.state.get_meta("scan_mtime")
 
             def run() -> None:
@@ -299,10 +366,13 @@ class Runtime:
             "autoMinutes": minutes,
             "scan": {
                 "running": library.scan_running,
+                "phase": library.scan_phase,
                 "done": library.scan_progress[0],
                 "total": library.scan_progress[1],
                 "error": library.scan_error,
                 "summary": library.scan.summary() if library.scan else None,
+                "check": library.check.summary() if library.check else None,
+                "checkError": library.check_error,
             },
             "queued": library.queued,
             "job": job.status() if job else None,
@@ -471,7 +541,8 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
         library = runtime.library(library_id)
         if library.scan is None:
             raise HTTPException(409, "Read the library first.")
-        return plan(library.scan, library.state, parse_options(await request.json()))
+        options = parse_options(await request.json())
+        return plan(library.scan, library.state, options, library.check)
 
     @app.post("/api/libraries/{library_id}/sync")
     async def sync(library_id: str, request: Request) -> dict[str, bool]:
@@ -497,9 +568,44 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
 
     @app.post("/api/stop")
     def stop() -> dict[str, bool]:
-        if runtime.job:
-            runtime.job.stop_event.set()
+        runtime.stop()
         return {"stopping": True}
+
+    @app.post("/api/libraries/{library_id}/check")
+    def check_library(library_id: str) -> dict[str, bool]:
+        runtime.start_check(runtime.library(library_id))
+        return {"started": True}
+
+    @app.get("/api/libraries/{library_id}/findings")
+    def library_findings(library_id: str) -> dict[str, Any]:
+        library = runtime.library(library_id)
+        if library.scan is None or library.check is None:
+            raise HTTPException(409, "Check the library first.")
+        return findings(library.scan, library.check, library.state, library.kind, library.path)
+
+    @app.post("/api/libraries/{library_id}/fixes")
+    async def save_fixes(library_id: str, request: Request) -> dict[str, int]:
+        library = runtime.library(library_id)
+        if library.scan is None:
+            raise HTTPException(409, "Read the library first.")
+        body = await request.json()
+        uuids = body.get("uuids")
+        known = {item.uuid for item in library.scan.items}
+        if not isinstance(uuids, list) or not uuids or any(u not in known for u in uuids):
+            raise HTTPException(422, "Choose items from this library.")
+        values = parse_fix(body)
+        library.state.save_fixes(list(dict.fromkeys(uuids)), **values)
+        return {"saved": len(set(uuids))}
+
+    @app.get("/api/places")
+    def places(name: str = "") -> list[dict[str, Any]]:
+        if len(name.strip()) < 2:
+            raise HTTPException(422, "Type at least two letters of the place.")
+        client = runtime.immich()
+        try:
+            return client.places(name.strip())
+        finally:
+            client.close()
 
     @app.post("/api/leftovers/delete")
     def delete_leftovers() -> dict[str, int]:
@@ -518,7 +624,7 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
             raise HTTPException(409, "Wait for the sync to finish.")
         client = runtime.immich()
         try:
-            return verify(library.scan, library.state, client, library.options)
+            return verify(library.scan, library.state, client, library.options, library.check)
         finally:
             client.close()
 

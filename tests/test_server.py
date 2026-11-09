@@ -73,7 +73,9 @@ def connect_and_read(client, immich):
     connect(client, immich)
     library_id = first(client.get("/api/state").json())["id"]
     assert client.post(f"/api/libraries/{library_id}/read", json={}).status_code == 200
-    state = wait_for(client, lambda s: first(s)["scan"]["summary"])
+    state = wait_for(
+        client, lambda s: first(s)["scan"]["summary"] and not first(s)["scan"]["running"]
+    )
     return library_id, first(state)
 
 

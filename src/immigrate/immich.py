@@ -14,6 +14,9 @@ mimetypes.add_type("image/heic", ".heic")
 mimetypes.add_type("image/heif", ".heif")
 mimetypes.add_type("video/quicktime", ".mov")
 
+CHECK_CHUNK = 1000
+UPDATE_CHUNK = 500
+
 
 class ImmichError(RuntimeError):
     def __init__(self, message: str, status: int | None = None):
@@ -25,6 +28,7 @@ class ImmichError(RuntimeError):
 class Upload:
     id: str
     duplicate: bool
+    sent: bool = True  # False when Immigrate linked to an asset without uploading
 
 
 class Immich:
@@ -163,6 +167,44 @@ class Immich:
     def album_asset_ids(self, album_id: str) -> set[str]:
         # Album responses stopped including assets in Immich v3.
         return set(self.search_ids(albumIds=[album_id]))
+
+    def existing(self, checksums: list[str]) -> dict[str, tuple[str, bool]]:
+        """Return the asset ID, and whether it's in the trash, for each checksum Immich has."""
+        found: dict[str, tuple[str, bool]] = {}
+        for start in range(0, len(checksums), CHECK_CHUNK):
+            chunk = checksums[start : start + CHECK_CHUNK]
+            body = self._json(
+                "POST",
+                "/assets/bulk-upload-check",
+                json={"assets": [{"id": checksum, "checksum": checksum} for checksum in chunk]},
+            )
+            for result in body["results"]:
+                if result.get("action") == "reject" and result.get("assetId"):
+                    found[result["id"]] = (result["assetId"], bool(result.get("isTrashed")))
+        return found
+
+    def update_assets(self, asset_ids: list[str], **fields: Any) -> None:
+        for start in range(0, len(asset_ids), UPDATE_CHUNK):
+            chunk = asset_ids[start : start + UPDATE_CHUNK]
+            self._request("PUT", "/assets", json={"ids": chunk, **fields})
+
+    def places(self, name: str) -> list[dict[str, Any]]:
+        results = self._json("GET", "/search/places", params={"name": name})
+        return [
+            {
+                "name": place["name"],
+                "region": ", ".join(
+                    dict.fromkeys(
+                        part
+                        for part in (place.get("admin2name"), place.get("admin1name"))
+                        if part and part != place["name"]
+                    )
+                ),
+                "latitude": place["latitude"],
+                "longitude": place["longitude"],
+            }
+            for place in results or []
+        ]
 
 
 def _detail(response: httpx.Response) -> str:

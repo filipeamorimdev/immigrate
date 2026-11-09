@@ -69,6 +69,9 @@ No cloud subscription required. No proprietary lock-in. Just your photos, your s
 - Carries over dates, locations, captions, keywords, favorites, and albums.
 - Adds people as tags such as `People/Ana`.
 - Resumes after a stop or restart, and only sends what changed on later runs.
+- Checks each library after reading it: duplicates, items Immich already has, and
+  items without a date or location.
+- Lets you set missing dates and locations, for a whole folder or day at a time.
 - Checks the result by asking Immich what it actually holds.
 - Syncs more than one library, each with its own choices and schedule.
 - Can keep checking for changes on a schedule, shown on the libraries page.
@@ -91,6 +94,32 @@ scan, plan, schedule, resume, and check as a Photos library.
 - Immigrate skips hidden files and folders, folders starting with `@` such as Synology's
   `@eaDir`, trash and snapshot folders, and photo apps' libraries. It doesn't follow
   symlinks. Add a Photos library on its own.
+
+## Duplicates and missing details
+
+After each read, Immigrate checks the library, whether it's a Photos library or a folder.
+
+- **Copies inside the library.** Identical files are found by checksum. Immich keeps one
+  copy either way. You choose whether a copy still adds the photo to its own album, or
+  is left out.
+- **Already in Immich.** Immigrate asks Immich which files it already has, for example
+  from the Immich phone app. You choose to link them, so they join albums and get
+  favorites and the dates and locations you set, without uploading them again, or to
+  leave them as they are. Either way they aren't uploaded again.
+- **Missing dates and locations.** A Photos library can only be missing a location. A
+  folder's files are read with exiftool, the tool Immich uses, so a missing date here
+  is a missing date in Immich too. Without a date, Immich uses the file's time.
+
+On **Set dates and locations**, you can choose items, or a whole folder or day, and give
+them a date or a place. Places come from Immich's own place search, or from coordinates
+you paste. When a nearby photo taken within a day has a location, Immigrate suggests it.
+What you set is kept by Immigrate and set in Immich when the item is sent, or on the
+next sync. Nothing in the library or folder changes. To see a photo, use **Open in
+Immich** once it's there. Immigrate doesn't show photos itself, because its page has no
+login.
+
+The first check reads every file, so on a large library it can take a while. You can
+stop it and pick up later. Later checks only read files that changed.
 
 ## A look around
 
@@ -279,6 +308,12 @@ and in the log. Until you choose one, Immigrate uses `TZ` if it's set, and UTC i
 - In a folder, Immigrate doesn't pair Live Photos by name. Immich links a pair itself
   when both files carry the same content ID, as Apple's exports do. Changing a `.xmp`
   file after a sync doesn't update the asset.
+- The check only finds identical files. A resized or re-saved copy counts as different.
+  Immich's own duplicate review can catch those.
+- A date or location you set wins over the file's. Clearing it in Immigrate doesn't
+  change what Immich already has. Change it in Immich instead.
+- If a copy is left out, or Immich already had the file, a `.xmp` beside it isn't
+  applied. Immich ignores a sidecar sent with a file it already has.
 - There's no login, so run it on your own network only. The API key is stored in
   the `/data` volume and never sent to the browser. Requests from other websites
   are refused.

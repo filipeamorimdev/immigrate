@@ -466,7 +466,7 @@ def test_full_flow_over_http(client, immich_server):
     assert library["autoMinutes"] == 0
     url_for = f"/api/libraries/{library['id']}"
     assert client.post(f"{url_for}/read", json={}).status_code == 200
-    library = wait_for(client, lambda lib: lib["scan"]["summary"])
+    library = wait_for(client, lambda lib: lib["scan"]["summary"] and not lib["scan"]["running"])
     assert library["scan"]["summary"]["total"] == 2
     assert client.post(f"{url_for}/preview", json={"albums": False}).json()["new"] == 2
     assert client.post(f"{url_for}/sync", json={"read": False}).status_code == 200

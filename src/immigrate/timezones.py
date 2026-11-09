@@ -53,6 +53,10 @@ def now() -> datetime:
     return datetime.now(_zone)
 
 
+def current() -> ZoneInfo:
+    return _zone
+
+
 class Formatter(logging.Formatter):
     """Writes log times in the chosen time zone, whatever the container's own one is."""
 

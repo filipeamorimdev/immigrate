@@ -3,7 +3,9 @@
 ## Setup
 
 You need Python 3.12 or later, Git, and Make. Docker is only needed for image builds
-and `make lock`.
+and `make lock`. Install exiftool too, for example with `brew install exiftool`. Without
+it, a folder's dates and locations aren't checked, and the test that runs exiftool is
+skipped.
 
 ```bash
 make setup     # creates .venv and installs the project with dev tools

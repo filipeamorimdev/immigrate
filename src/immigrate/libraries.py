@@ -9,12 +9,15 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .check import Check, run_check
 from .folder_library import folder_marker, scan_folder
 from .folders import FOLDER, PHOTOS
+from .immich import Immich
 from .library import Scan, scan_library
 from .state import State
 from .sync import Options
@@ -55,9 +58,14 @@ class Library:
         self.state = State(self.folder / "state.db")
         self.scan_path = self.folder / "scan.json.gz"
         self.scan = self.load_scan()
-        self.scan_running = False
+        self.check_path = self.folder / "check.json.gz"
+        self.check = self.load_check()
+        self.scan_running = False  # true while reading or checking
+        self.scan_phase = "reading"  # then checksums, details, and immich while checking
         self.scan_progress = (0, 0)
         self.scan_error: str | None = None
+        self.check_error: str | None = None
+        self.stop_event = threading.Event()
         self.scan_logged_at: float | None = None
         self.queued = False  # a sync starts when the current read ends
         self.last_check = float(self.state.get_meta("last_check", 0.0))
@@ -88,6 +96,30 @@ class Library:
             log.warning("Couldn't load the saved read of %s, so it needs reading again", self.name)
             return None
         return scan if scan.library == self.path else None
+
+    def load_check(self) -> Check | None:
+        """Return the saved check, if it belongs to the saved read."""
+        if self.scan is None or not self.check_path.exists():
+            return None
+        try:
+            with gzip.open(self.check_path, "rt") as file:
+                check = Check.from_dict(json.load(file))
+        except (OSError, ValueError, KeyError, TypeError):
+            log.warning(
+                "Couldn't load the saved check of %s, so it needs checking again", self.name
+            )
+            return None
+        same = check.library == self.path and check.scanned_at == self.scan.scanned_at
+        return check if same else None
+
+    def save_check(self, check: Check) -> None:
+        temporary = self.check_path.with_suffix(".tmp")
+        try:
+            with gzip.open(temporary, "wt") as file:
+                json.dump(check.to_dict(), file)
+            temporary.replace(self.check_path)
+        except OSError:
+            log.warning("Couldn't save the check of %s, so it will be lost on restart", self.name)
 
     def save_scan(self, scan: Scan) -> None:
         temporary = self.scan_path.with_suffix(".tmp")
@@ -121,8 +153,60 @@ class Library:
             else:
                 log.info("Found %d items so far", done)
 
-    def read(self) -> None:
-        """Read the library in this thread. The caller sets `scan_running` first."""
+    def report_check(self, phase: str, done: int, total: int) -> None:
+        self.scan_phase = phase
+        self.scan_progress = (done, total)
+        now = time.monotonic()
+        if self.scan_logged_at is None or now - self.scan_logged_at >= SCAN_LOG_SECONDS:
+            self.scan_logged_at = now
+            log.info("Checking %s: %d of %d", phase, done, total)
+
+    def check_now(self, connect: Callable[[], Immich | None]) -> None:
+        """Check the current read in this thread. Immich is only asked when connected."""
+        if self.scan is None:
+            return
+        self.scan_phase, self.scan_progress, self.check_error = "checksums", (0, 0), None
+        immich = None
+        try:
+            immich = connect()
+            check = run_check(
+                self.scan,
+                self.state,
+                immich,
+                self.kind == FOLDER,
+                self.stop_event,
+                self.report_check,
+            )
+            self.check = check
+            self.save_check(check)
+            log.info("Checked %s: %s", self.name, check.summary())
+        except Exception as exc:
+            log.exception("Couldn't check the library at %s", self.path)
+            self.check_error = f"Couldn't finish checking the library. Details: {exc}"
+        finally:
+            if immich is not None:
+                immich.close()
+
+    def read(self, connect: Callable[[], Immich | None] | None = None) -> None:
+        """Read the library in this thread, then check it when `connect` is given.
+
+        The caller sets `scan_running` first.
+        """
+        try:
+            self.read_only()
+            if connect is not None and self.scan_error is None and not self.stop_event.is_set():
+                self.check_now(connect)
+        finally:
+            self.scan_running = False
+
+    def check_only(self, connect: Callable[[], Immich | None]) -> None:
+        try:
+            self.check_now(connect)
+        finally:
+            self.scan_running = False
+
+    def read_only(self) -> None:
+        self.scan_phase = "reading"
         marker = self.change_marker()
         log.info("Reading the library at %s", self.path)
         scan = scan_folder if self.kind == FOLDER else scan_library
@@ -132,6 +216,7 @@ class Library:
             if self.scan.unreadable:
                 log.warning("Couldn't open %d folders", len(self.scan.unreadable))
             self.save_scan(self.scan)
+            self.check = None  # it belonged to the earlier read
             self.state.set_meta("scan_mtime", marker)
         except Exception as exc:
             log.exception("Couldn't read the library at %s", self.path)
@@ -139,17 +224,22 @@ class Library:
                 f"Couldn't read the library at {self.path}. Check that the container "
                 f"can read it. Details: {exc}"
             )
-        finally:
-            self.scan_running = False
 
-    def start_read(self) -> threading.Thread:
+    def start(self, target: Callable[[], None]) -> threading.Thread:
         self.scan_running = True
-        self.scan_error = None
+        self.scan_error = self.check_error = None
         self.scan_progress = (0, 0)
         self.scan_logged_at = None
-        thread = threading.Thread(target=self.read, daemon=True, name=f"scan-{self.id}")
+        self.stop_event.clear()
+        thread = threading.Thread(target=target, daemon=True, name=f"scan-{self.id}")
         thread.start()
         return thread
+
+    def start_read(self, connect: Callable[[], Immich | None] | None = None) -> threading.Thread:
+        return self.start(lambda: self.read(connect))
+
+    def start_check(self, connect: Callable[[], Immich | None]) -> threading.Thread:
+        return self.start(lambda: self.check_only(connect))
 
 
 def migrate_single_library(data_dir: Path, path: str) -> None:
