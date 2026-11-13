@@ -1,6 +1,6 @@
 services:
   immigrate:
-    # Pin a version, such as :0.2.0, to update only when you choose to.
+    # Pin a version, such as :0.3.0, to update only when you choose to.
     image: ghcr.io/filipeamorimdev/immigrate:latest
     container_name: immigrate
     restart: unless-stopped

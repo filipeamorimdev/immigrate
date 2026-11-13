@@ -20,6 +20,9 @@ let previewLoading = false;
 let folders = null;
 let folderError = "";
 let foldersLoading = false;
+// Photos and videos in each folder of the picker, by path. A count can take a few seconds.
+const folderCounts = new Map();
+let countRound = 0;
 let mosaicText = "";
 let lastPage = "";
 let lastTick = 0;
@@ -195,7 +198,7 @@ function renderFolders() {
     `<button data-folder="${escapeHtml(parts.slice(0, index + 1).join("/"))}">${escapeHtml(name)}</button>`)].join("<span>/</span>");
   const rows = folders.folders.map((folder) => {
     if (!folder.library) {
-      return `<li><button class="folder" data-folder="${escapeHtml(folder.path)}">${escapeHtml(folder.name)}</button></li>`;
+      return `<li><button class="folder" data-folder="${escapeHtml(folder.path)}">${escapeHtml(folder.name)}${countLine(folder.path)}</button></li>`;
     }
     const library = added.get(folder.path);
     const action = library && isSetUp(library)
@@ -210,7 +213,7 @@ function renderFolders() {
     ? `<a class="button" href="#/library/${here.id}">Open</a>`
     : `<button class="button" data-pick="${escapeHtml(folders.path)}">Use this folder</button>`;
   return `<nav class="crumbs" aria-label="Folder">${crumbs}</nav>
-    <div class="actions use-folder">${useHere}</div>
+    <div class="actions use-folder">${useHere}${countLine(folders.path, "Here and in its subfolders: ")}</div>
     ${errorLine(folderError)}
     <ul class="folders">${rows}${empty}${more}</ul>`;
 }
@@ -819,13 +822,56 @@ async function openFolder(path) {
   try {
     folders = await api(`/api/folders?path=${encodeURIComponent(path)}`);
     folderError = "";
+    countFolders();
   } catch (error) {
     folderError = error.message;
   }
 }
 
+function countText(found) {
+  if (!found) return "Counting…";
+  if (found.error) return "Couldn't be counted";
+  const total = found.photos + found.videos;
+  if (!found.complete) return `More than ${plural(total, "photo or video", "photos and videos")}`;
+  if (!total) return "No photos or videos";
+  const parts = [];
+  if (found.photos) parts.push(plural(found.photos, "photo"));
+  if (found.videos) parts.push(plural(found.videos, "video"));
+  return parts.join(" and ");
+}
+
+function countLine(path, prefix = "") {
+  return `<small class="count" data-count="${escapeHtml(path)}" data-prefix="${escapeHtml(prefix)}">${escapeHtml(prefix + countText(folderCounts.get(path)))}</small>`;
+}
+
+function showCount(path) {
+  for (const line of view.querySelectorAll("[data-count]")) {
+    if (line.dataset.count === path) line.textContent = line.dataset.prefix + countText(folderCounts.get(path));
+  }
+}
+
+// Count the open folder and the folders in it, a few at a time. Opening another folder stops this.
+function countFolders() {
+  const round = ++countRound;
+  const waiting = [folders.path, ...folders.folders.filter((folder) => !folder.library).map((folder) => folder.path)]
+    .filter((path) => !folderCounts.has(path));
+  const next = async () => {
+    while (waiting.length && round === countRound) {
+      const path = waiting.shift();
+      try {
+        folderCounts.set(path, await api(`/api/folders/count?path=${encodeURIComponent(path)}`));
+      } catch {
+        folderCounts.set(path, { error: true });
+      }
+      showCount(path);
+    }
+  };
+  for (let i = 0; i < 3; i += 1) next();
+}
+
 async function loadFolders() {
   foldersLoading = true;
+  folderCounts.clear();
   // Start beside the library added last, where the next one is likely to be.
   const latest = state.libraries.at(-1)?.path || "";
   const parent = latest.split("/").slice(0, -1).join("/");

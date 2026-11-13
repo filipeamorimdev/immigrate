@@ -172,12 +172,14 @@ h2.section { margin-top: 3.5rem; }
 .use-folder { margin: 0.5rem 0 1rem; }
 .folders { margin: 0 0 1.5rem; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .folders li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; border-bottom: 1px solid var(--line); }
-.folders .folder { flex: 1; padding: 0.6rem 0; text-align: left; }
-.folders .folder::after { content: "›"; float: right; color: var(--soft-ink); }
+.folders .folder { position: relative; flex: 1; padding: 0.6rem 1.5rem 0.6rem 0; text-align: left; }
+.folders .folder::after { content: "›"; position: absolute; top: 50%; right: 0; transform: translateY(-50%); color: var(--soft-ink); }
 .folders .folder:hover { color: var(--exposed); }
 .folders .library { padding: 0.5rem 0; }
 .folders .library small { display: block; color: var(--soft-ink); font-size: 0.9375rem; }
 .folders .empty { padding: 0.6rem 0; color: var(--soft-ink); }
+.folders .folder .count { display: block; color: var(--soft-ink); font-size: 0.9375rem; }
+.use-folder .count { align-self: center; color: var(--soft-ink); font-size: 0.9375rem; }
 summary { cursor: pointer; font-weight: 700; }
 .link { padding: 0; border: 0; background: none; color: var(--exposed); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .link:hover { color: var(--exposed-hover); }

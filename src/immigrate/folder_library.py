@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from . import timezones
 from .folders import is_app_library, is_system_folder
@@ -101,6 +103,8 @@ VIDEO_EXTENSIONS = frozenset(
 )
 ASSET_EXTENSIONS = RAW_EXTENSIONS | IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 SIDECAR_EXTENSION = ".xmp"
+# How long the folder picker may spend counting one folder before it gives up.
+COUNT_SECONDS = 5.0
 
 
 @dataclass
@@ -256,3 +260,24 @@ def folder_marker(path: str) -> str:
         for file in files:
             digest.update(os.fsencode(f"{file.path}\0{file.size}\0{file.mtime_ns}\0"))
     return digest.hexdigest()
+
+
+def count_media(path: str, seconds: float = COUNT_SECONDS) -> dict[str, Any]:
+    """Count the photos and videos a scan of this folder would find, including subfolders.
+
+    A large tree can take a long time to go through, so the count stops after `seconds`
+    and says it's incomplete. Files are counted, so a RAW and its JPEG count as two.
+    """
+    deadline = time.monotonic() + seconds
+    photos = videos = 0
+    complete = True
+    for _, files, _ in _walk(path, []):
+        for file in files:
+            if file.extension in VIDEO_EXTENSIONS:
+                videos += 1
+            else:
+                photos += 1
+        if time.monotonic() > deadline:
+            complete = False
+            break
+    return {"photos": photos, "videos": videos, "complete": complete}

@@ -133,7 +133,9 @@ the API key.
 ![Settings page with the Immich address and API key fields and a Connect button](docs/images/settings-connection.png)
 
 Add a library by browsing the NAS folders until you find the `.photoslibrary`, or a
-folder of photos.
+folder of photos. Each folder shows how many photos and videos are in it, including
+its subfolders. A RAW file and its JPEG count as two. A folder that takes more than
+a few seconds to count shows the number found so far.
 
 ![Step 1 of adding a library: Choose a Photos library](docs/images/add-library.png)
 
@@ -179,7 +181,7 @@ This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
 ```yaml
 services:
   immigrate:
-    # Pin a version, such as :0.2.0, to update only when you choose to.
+    # Pin a version, such as :0.3.0, to update only when you choose to.
     image: ghcr.io/filipeamorimdev/immigrate:latest
     restart: unless-stopped
     ports:

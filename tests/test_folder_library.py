@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 
 from immigrate import timezones
 from immigrate.config import Config
-from immigrate.folder_library import ASSET_EXTENSIONS, clean_name, folder_marker, scan_folder
+from immigrate.folder_library import (
+    ASSET_EXTENSIONS,
+    clean_name,
+    count_media,
+    folder_marker,
+    scan_folder,
+)
 from immigrate.immich import Immich
 from immigrate.libraries import Library
 from immigrate.library import Scan
@@ -492,6 +498,45 @@ def test_the_browser_hides_system_folders_and_marks_libraries(client):
         "Real.photoslibrary": True,
     }
     assert [f["name"] for f in client.get("/api/folders?path=Photos").json()["folders"]] == ["trip"]
+
+
+def test_counts_what_a_scan_would_send(tmp_path):
+    root = tmp_path / "root"
+    add(root / "a.jpg")
+    add(root / "a.cr2")
+    add(root / "a.jpg.xmp")
+    add(root / "notes.txt")
+    add(root / ".hidden.jpg")
+    add(root / "trip" / "b.mov")
+    add(root / "trip" / "c.HEIC")
+    add(root / "@eaDir" / "thumbnail.jpg")
+    add(root / "Old.photoslibrary" / "originals" / "d.jpg")
+    add(root / "Renamed" / "database" / "Photos.sqlite")
+    add(root / "Renamed" / "originals" / "e.jpg")
+    outside = add(tmp_path / "outside" / "f.jpg").parent
+    (root / "link").symlink_to(outside)
+    assert count_media(str(root)) == {"photos": 3, "videos": 1, "complete": True}
+    assert count_media(str(root / "trip")) == {"photos": 1, "videos": 1, "complete": True}
+
+
+def test_a_count_that_takes_too_long_says_so(tmp_path):
+    for name in "abc":
+        add(tmp_path / name / f"{name}.jpg")
+    found = count_media(str(tmp_path), seconds=-1)
+    assert not found["complete"] and found["photos"] < 3
+
+
+def test_the_browser_counts_each_folder(client):
+    assert client.get("/api/folders/count?path=Photos").json() == {
+        "path": "Photos",
+        "photos": 1,
+        "videos": 1,
+        "complete": True,
+    }
+    assert client.get("/api/folders/count").json()["photos"] == 1
+    assert client.get("/api/folders/count?path=Photos/trip").json()["videos"] == 1
+    for path in ["Real.photoslibrary", "@eaDir", "..", "nowhere"]:
+        assert client.get("/api/folders/count", params={"path": path}).status_code == 422
 
 
 def test_the_top_of_the_shared_folder_can_be_chosen(client, nas):

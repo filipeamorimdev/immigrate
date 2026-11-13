@@ -111,5 +111,8 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
   applied with `PUT /assets`, which also works on assets Immigrate didn't upload. A date
   is sent with its time zone offset, so Immich keeps that time zone, and Immich locks
   the value so its own metadata extraction doesn't replace it.
+- **The folder picker counts each folder on its own request.** The list of folders comes
+  back at once, and the page asks for counts three at a time. A count stops after five
+  seconds, so a huge tree can't hold up the picker or the NAS.
 - **The page doesn't show photos.** It has no login, and browsers can't show HEIC or
   RAW. Items already in Immich link to it, behind Immich's own login.

@@ -24,7 +24,8 @@ from starlette.middleware.gzip import GZipMiddleware
 from . import __version__, timezones
 from .config import Config
 from .findings import findings
-from .folders import FOLDER, PHOTOS, FolderError, display_path, list_folders, source_at
+from .folder_library import count_media
+from .folders import FOLDER, PHOTOS, FolderError, display_path, folder_at, list_folders, source_at
 from .immich import Immich, ImmichError
 from .libraries import Library, library_id, migrate_single_library
 from .sync import Job, Options, plan, verify
@@ -504,6 +505,17 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
             return list_folders(runtime.config.library_root, path)
         except FolderError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/folders/count")
+    def count_folder(path: str = "") -> dict[str, Any]:
+        """Count what's in one folder of the picker. Each folder is asked for on its own."""
+        try:
+            folder = folder_at(runtime.config.library_root, path)
+            return {"path": path, **count_media(str(folder))}
+        except FolderError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(422, "Immigrate can't open this folder.") from exc
 
     @app.post("/api/libraries")
     async def add_library(request: Request) -> dict[str, Any]:
