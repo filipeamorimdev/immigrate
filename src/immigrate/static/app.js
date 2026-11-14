@@ -6,6 +6,11 @@ const RUNNING = ["queued", "uploading", "fixing", "albums"];
 const view = document.getElementById("view");
 let state = null;
 let identity = null;
+let connection = null; // whether the saved connection works: { connected, name, version, error }
+let connectionStale = false; // the connection page checks it again each time it opens
+// The dialog that walks through connecting when Immich can't be reached on load.
+const wizard = { step: "address", url: "", key: "", error: "", busy: false, version: null, result: null };
+const wizardDialog = document.getElementById("wizard");
 let connectError = "";
 let formError = "";
 let saveError = "";
@@ -94,8 +99,7 @@ const shownPath = (library) => library.path || "NAS";
 
 function page() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-  if (!state.hasKey) return ["connect"];
-  if (parts[0] === "connect") return setupDone() ? ["settings"] : ["add"];
+  if (parts[0] === "connect") return ["connection"];
   if (!parts.length) return state.libraries.length ? ["libraries"] : ["add"];
   return parts;
 }
@@ -144,19 +148,22 @@ function drawMosaic() {
 function renderNav(current) {
   const tabs = document.getElementById("tabs");
   const steps = document.getElementById("steps");
-  tabs.hidden = !setupDone();
+  const gear = document.getElementById("gear");
+  const onConnection = current[0] === "connection";
+  if (onConnection) gear.setAttribute("aria-current", "page");
+  else gear.removeAttribute("aria-current");
+  if (connection) gear.dataset.connected = String(connection.connected);
+  tabs.hidden = !setupDone() || onConnection;
   const settings = current[0] === "settings";
   tabs.innerHTML = `<a href="#/libraries" ${settings ? "" : 'aria-current="page"'}>Libraries</a>
     <a href="#/settings" ${settings ? 'aria-current="page"' : ""}>Settings</a>`;
 
-  const wizard = ["connect", "add"].includes(current[0]);
-  steps.hidden = !wizard;
-  if (!wizard) return;
-  const names = ["Connect to Immich", "Choose library", "Read library", "Choose what to send"];
-  let index = current[0] === "connect" ? 0 : !current[1] ? 1 : current[2] === "choose" ? 3 : 2;
-  const shown = setupDone() ? names.slice(1) : names;
-  if (setupDone()) index -= 1;
-  steps.innerHTML = shown.map((name, i) =>
+  const adding = current[0] === "add";
+  steps.hidden = !adding;
+  if (!adding) return;
+  const names = ["Choose library", "Read library", "Choose what to send"];
+  const index = !current[1] ? 0 : current[2] === "choose" ? 2 : 1;
+  steps.innerHTML = names.map((name, i) =>
     `<li class="${i < index ? "done" : ""}" ${i === index ? 'aria-current="step"' : ""}>${i + 1}. ${name}</li>`).join("");
 }
 
@@ -177,14 +184,25 @@ function renderConnectForm() {
       </label>
       ${key}
       ${errorLine(connectError)}
-      ${identity ? `<div class="note good"><p>Connected as ${escapeHtml(identity.name)}, Immich ${escapeHtml(identity.version)}. Saved.</p></div>` : ""}
-      <div class="actions"><button class="button primary" type="submit">Connect</button></div>
+      <div class="actions"><button class="button primary" type="submit">Connect</button>
+        ${identity ? `<span class="status good">Saved.</span>` : ""}</div>
     </form>`;
 }
 
-function renderSetupConnect() {
-  return `<h2>Connect to Immich</h2>
-    <p class="lead">Photos upload to the account that owns this API key. Immigrate saves the connection once Immich accepts it.</p>
+function connectionLine() {
+  if (!connection) return `<p class="status-line">Checking the connection…</p>`;
+  if (connection.connected) {
+    return `<p class="status-line good">Connected to ${escapeHtml(state.immichUrl)} as ${escapeHtml(connection.name)}, Immich ${escapeHtml(connection.version)}.</p>`;
+  }
+  return `<p class="status-line bad">${connection.error ? `Not connected. ${escapeHtml(connection.error)}` : "Not connected yet."}</p>`;
+}
+
+function renderConnection() {
+  const [href, text] = state.libraries.length ? ["#/libraries", "All libraries"] : ["#/add", "Choose a library"];
+  return `<p><a class="back" href="${href}">${text}</a></p>
+    <h2>Immich connection</h2>
+    <p class="lead">Every library uploads to the account that owns this API key. Immigrate saves the connection once Immich accepts it, and uses it for every sync after that.</p>
+    ${connectionLine()}
     ${renderConnectForm()}`;
 }
 
@@ -648,7 +666,7 @@ function renderDashboard() {
       <div class="actions">${syncButton(library)}<a class="button" href="#/library/${library.id}">Open</a></div>
     </li>`).join("");
   return `<h2>Libraries</h2>
-    <p class="lead">Sending to ${escapeHtml(state.immichUrl)}. Open a library to see its details or change its settings.</p>
+    <p class="lead">${state.hasKey ? `Sending to ${escapeHtml(state.immichUrl)}.` : `Not connected to Immich yet. <a href="#/connection">Connect to Immich</a>.`} Open a library to see its details or change its settings.</p>
     <ul class="cards">${cards}</ul>
     ${errorLine(formError)}
     <div class="actions"><a class="button" href="#/add">Add a library</a></div>`;
@@ -768,10 +786,8 @@ function renderSettings() {
   const saved = state.defaults;
   const values = draft?.values ?? saved;
   return `<h2>Settings</h2>
-    <h3 class="section first">Immich connection</h3>
-    <p class="lead">Every library uploads to the account that owns this API key. Immigrate saves the connection once Immich accepts it.</p>
-    ${renderConnectForm()}
-    <h3 class="section">Time zone</h3>
+    <p class="lead">The Immich connection is behind the gear at the top right.</p>
+    <h3 class="section first">Time zone</h3>
     ${renderTimeZone()}
     <h3 class="section">Defaults for new libraries</h3>
     <p class="lead">A library you add starts with these choices. A folder only uses the schedule, and its albums start turned off. Changing these doesn't change libraries you've already added. Change those on each library's page.</p>
@@ -782,7 +798,7 @@ function renderSettings() {
 function renderPage(current) {
   const library = currentLibrary();
   switch (current[0]) {
-    case "connect": return renderSetupConnect();
+    case "connection": return renderConnection();
     case "add":
       if (!library) return renderWizardLibrary();
       if (current[2] === "fix") return renderFix(library, "add");
@@ -806,6 +822,7 @@ function render() {
     draft = null;
     freed = null;
     identity = null;
+    connectionStale = current[0] === "connection";
     window.scrollTo(0, 0);
   }
   if (view.contains(document.activeElement) && document.activeElement.matches("input, select")) {
@@ -989,6 +1006,10 @@ function loadPageData(current) {
     loadFindings(library);
   }
   if (current[0] === "settings" && !timeZones && !timeZonesLoading) loadTimeZones();
+  if (current[0] === "connection" && connectionStale) {
+    connectionStale = false;
+    checkConnection();
+  }
   if (current[0] === "add" && !library && !folders && !foldersLoading) loadFolders();
   const wantsPreview = current[0] === "library" || current[2] === "choose";
   if (library?.scan.summary && wantsPreview && preview?.page !== lastPage && !previewLoading) {
@@ -1003,6 +1024,104 @@ function loadPageData(current) {
       render();
     }).catch(() => {});
   }
+}
+
+async function checkConnection() {
+  try {
+    connection = await api("/api/connection");
+  } catch {
+    connection = { connected: false, error: "Immigrate couldn't check the connection. Reload the page to try again." };
+  }
+  render();
+}
+
+function openWizard() {
+  Object.assign(wizard, { step: "address", url: state.immichUrl || "", key: "", error: "", busy: false, version: null, result: null });
+  drawWizard();
+  if (!wizardDialog.open) wizardDialog.showModal();
+  wizardDialog.querySelector("input")?.focus();
+}
+
+function drawWizard() {
+  const steps = [["address", "Immich address"], ...(state.keyFromEnv ? [] : [["key", "API key"]]), ["done", "Done"]];
+  const index = steps.findIndex(([step]) => step === wizard.step);
+  const list = `<ol class="steps" aria-label="Connection steps">${steps.map(([, name], i) =>
+    `<li class="${i < index ? "done" : ""}" ${i === index ? 'aria-current="step"' : ""}>${i + 1}. ${name}</li>`).join("")}</ol>`;
+  const busy = wizard.busy ? "disabled" : "";
+  let body = "";
+  if (wizard.step === "address") {
+    const problem = connection?.error ? `<div class="note bad"><p>${escapeHtml(connection.error)}</p></div>` : "";
+    body = `<h2 id="wizard-title">${connection?.error ? "Immigrate can't reach Immich" : "Connect to Immich"}</h2>
+      <p class="lead">Immigrate sends your photos and videos to Immich. Tell it where Immich is, and it saves the connection for every sync.</p>
+      ${problem}
+      <form data-wizard="address">
+        <label class="field">Immich address
+          <small>Include the port, for example http://192.168.1.20:2283.</small>
+          <input id="wizard-url" type="url" required value="${escapeHtml(wizard.url)}">
+        </label>
+        ${errorLine(wizard.error)}
+        <div class="actions"><button class="button primary" type="submit" ${busy}>${state.keyFromEnv ? "Connect" : "Next"}</button>
+          <button class="button" type="button" data-wizard-close>Not now</button></div>
+      </form>`;
+  } else if (wizard.step === "key") {
+    const keep = state.hasKey ? " Leave this empty to keep the saved key." : "";
+    body = `<h2 id="wizard-title">Add an API key</h2>
+      <p class="lead">Immich ${escapeHtml(wizard.version)} answered at ${escapeHtml(wizard.url)}. Photos upload to the account that owns this key.</p>
+      <ol class="howto">
+        <li>Open Immich and sign in as the person the photos belong to.</li>
+        <li>Open Account Settings, then API Keys, and choose New API Key.</li>
+        <li>Give it permission to upload, read, and update assets, manage albums, and create stacks. Copy the key.</li>
+      </ol>
+      <form data-wizard="key">
+        <label class="field">API key
+          <small>Immigrate keeps it on the server and never shows it again.${keep}</small>
+          <input id="wizard-key" type="password" autocomplete="off" ${state.hasKey ? "" : "required"} value="${escapeHtml(wizard.key)}">
+        </label>
+        ${errorLine(wizard.error)}
+        <div class="actions"><button class="button primary" type="submit" ${busy}>Connect</button>
+          <button class="button" type="button" data-wizard-back>Back</button></div>
+      </form>`;
+  } else {
+    const who = wizard.result;
+    body = `<h2 id="wizard-title">Connected to Immich</h2>
+      <p class="lead">Connected as ${escapeHtml(who.name)}, Immich ${escapeHtml(who.version)}. Saved. Immigrate uses this connection for every sync. Change it any time with the gear at the top right.</p>
+      <div class="actions"><button class="button primary" type="button" data-wizard-close>Done</button></div>`;
+  }
+  wizardDialog.innerHTML = list + body;
+}
+
+async function wizardSubmit(form) {
+  wizard.error = "";
+  wizard.busy = true;
+  drawWizard();
+  try {
+    if (form.dataset.wizard === "address") {
+      wizard.url = wizard.url.trim();
+      if (state.keyFromEnv) {
+        await wizardConnect();
+      } else {
+        wizard.version = (await api("/api/connection/address", { url: wizard.url })).version;
+        wizard.step = "key";
+      }
+    } else {
+      await wizardConnect();
+    }
+  } catch (error) {
+    wizard.error = error.message;
+  }
+  wizard.busy = false;
+  drawWizard();
+  const field = wizardDialog.querySelector("input");
+  if (field) field.focus();
+  else wizardDialog.querySelector("button")?.focus();
+}
+
+async function wizardConnect() {
+  wizard.result = await api("/api/connect", { url: wizard.url, key: wizard.key });
+  wizard.key = "";
+  connection = { connected: true, ...wizard.result };
+  wizard.step = "done";
+  await tick();
 }
 
 // A library that was only just added leaves again if the setup is abandoned.
@@ -1061,6 +1180,13 @@ async function act(name, button) {
 }
 
 document.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-wizard-close]")) { wizardDialog.close(); return; }
+  if (event.target.closest("[data-wizard-back]")) {
+    Object.assign(wizard, { step: "address", error: "" });
+    drawWizard();
+    wizardDialog.querySelector("input")?.focus();
+    return;
+  }
   const folder = event.target.closest("[data-folder]");
   if (folder) { await openFolder(folder.dataset.folder); render(); return; }
   const pick = event.target.closest("[data-pick]");
@@ -1120,6 +1246,8 @@ document.addEventListener("input", (event) => {
   if (event.target.id === "fix-date") fix.draft.date = event.target.value;
   if (event.target.id === "url") draftUrl = event.target.value;
   if (event.target.id === "key") draftKey = event.target.value;
+  if (event.target.id === "wizard-url") wizard.url = event.target.value;
+  if (event.target.id === "wizard-key") wizard.key = event.target.value;
 });
 
 document.addEventListener("change", async (event) => {
@@ -1166,6 +1294,7 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (event.target.dataset.wizard) { await wizardSubmit(event.target); return; }
   if (event.target.id !== "connect") return;
   connectError = "";
   identity = null;
@@ -1174,7 +1303,7 @@ document.addEventListener("submit", async (event) => {
     const result = await api("/api/connect", { url: draftUrl, key: draftKey });
     draftKey = "";
     document.activeElement.blur();
-    if (page()[0] === "connect") location.hash = "#/add";
+    connection = { connected: true, ...result };
     await tick();
     identity = result;
   } catch (error) {
@@ -1193,10 +1322,13 @@ async function tick() {
 }
 
 window.addEventListener("resize", drawMosaic);
+wizardDialog.addEventListener("close", render);
 window.addEventListener("hashchange", () => tick().catch(render));
 
 (async function start() {
   await tick();
+  await checkConnection();
+  if (!connection.connected) openWizard();
   setInterval(() => {
     const busy = state.libraries.some((l) => l.scan.running || l.queued || isRunning(l.job));
     // Quiet pages still refresh now and then, so a scheduled sync shows up.

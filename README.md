@@ -127,8 +127,9 @@ Every library you add is listed with its last sync and schedule.
 
 ![Libraries page with one library, last synced Nov 4, 2026, with Start sync and Open buttons](docs/images/libraries.png)
 
-Connect to Immich once in Settings. Every library uploads to the account that owns
-the API key.
+Connect to Immich once, with the gear at the top right. If Immigrate can't reach
+Immich when the page opens, it walks you through the address and API key. Every
+library uploads to the account that owns the API key.
 
 ![Settings page with the Immich address and API key fields and a Connect button](docs/images/settings-connection.png)
 
@@ -139,7 +140,7 @@ a few seconds to count shows the number found so far.
 
 ![Step 1 of adding a library: Choose a Photos library](docs/images/add-library.png)
 
-Settings also holds the choices each new library starts with: edited photos, hidden
+Settings holds the choices each new library starts with: edited photos, hidden
 photos, albums, people, and how often to check for changes.
 
 ![Defaults for new libraries: edited photos, hidden photos, organization, and keep in sync](docs/images/settings-defaults.png)
@@ -181,7 +182,7 @@ This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
 ```yaml
 services:
   immigrate:
-    # Pin a version, such as :0.3.0, to update only when you choose to.
+    # Pin a version, such as :0.4.0, to update only when you choose to.
     image: ghcr.io/filipeamorimdev/immigrate:latest
     restart: unless-stopped
     ports:

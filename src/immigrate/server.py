@@ -36,6 +36,8 @@ STATIC = Path(__file__).parent / "static"
 AUTO_SYNC_POLL_SECONDS = 30
 ALLOWED_AUTO_MINUTES = (0, 15, 60, 360, 1440)
 DEFAULT_AUTO_MINUTES = 60
+# How long to wait for Immich to answer when testing a connection from the page.
+CONNECTION_TIMEOUT = 10.0
 # osxphotos names the folder it copies the Photos database into like this.
 TEMP_PREFIX = "osxphotos_"
 
@@ -84,6 +86,21 @@ def parse_fix(body: dict[str, Any]) -> dict[str, Any]:
     if not values:
         raise HTTPException(422, "Set a date or a location, or choose what to clear.")
     return values
+
+
+def parse_address(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url:
+        raise HTTPException(422, "Enter the Immich address.")
+    if urlparse(url).scheme not in ("http", "https"):
+        raise HTTPException(422, "The Immich address must start with http:// or https://.")
+    return url
+
+
+def connection_error(url: str, exc: ImmichError) -> str:
+    if exc.status == 401:
+        return "Immich refused that API key. Create a new one in Account Settings."
+    return f"Couldn't reach Immich at {url}. {exc}"
 
 
 def parse_options(value: Any) -> Options:
@@ -164,7 +181,7 @@ class Runtime:
 
     def require_connection(self) -> None:
         if not self.settings.get("url") or not self.settings.get("key"):
-            raise HTTPException(409, "Connect to Immich first.")
+            raise HTTPException(409, "Connect to Immich first. Open the gear at the top right.")
 
     def immich(self) -> Immich:
         self.require_connection()
@@ -450,24 +467,45 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
             "leftovers": runtime.leftover_state(),
         }
 
+    @app.get("/api/connection")
+    def connection() -> dict[str, Any]:
+        """Whether the saved address and key work now. The page asks once when it opens."""
+        url, key = runtime.settings.get("url"), runtime.settings.get("key")
+        if not url or not key:
+            return {"connected": False, "error": None}
+        client = Immich(url, key, retries=1, connect_timeout=CONNECTION_TIMEOUT)
+        try:
+            return {"connected": True, **client.identity()}
+        except ImmichError as exc:
+            return {"connected": False, "error": connection_error(url, exc)}
+        finally:
+            client.close()
+
+    @app.post("/api/connection/address")
+    async def check_address(request: Request) -> dict[str, Any]:
+        """See whether Immich answers at an address, before asking for a key."""
+        url = parse_address((await request.json()).get("url"))
+        client = Immich(url, "", retries=1, connect_timeout=CONNECTION_TIMEOUT)
+        try:
+            return client.version()
+        except ImmichError as exc:
+            raise HTTPException(502, connection_error(url, exc)) from exc
+        finally:
+            client.close()
+
     @app.post("/api/connect")
     async def connect(request: Request) -> dict[str, Any]:
         body = await request.json()
-        url = (body.get("url") or runtime.settings.get("url") or "").strip()
+        url = parse_address(body.get("url") or runtime.settings.get("url"))
         key = (body.get("key") or runtime.settings.get("key") or "").strip()
-        if not url or not key:
-            raise HTTPException(422, "Enter the Immich address and an API key.")
-        if urlparse(url).scheme not in ("http", "https"):
-            raise HTTPException(422, "The Immich address must start with http:// or https://.")
-        client = Immich(url, key, retries=1)
+        if not key:
+            raise HTTPException(422, "Enter an API key.")
+        client = Immich(url, key, retries=1, connect_timeout=CONNECTION_TIMEOUT)
         try:
             identity = client.identity()
         except ImmichError as exc:
-            if exc.status == 401:
-                raise HTTPException(
-                    401, "Immich refused that API key. Create a new one in Account Settings."
-                ) from exc
-            raise HTTPException(502, f"Couldn't reach Immich at {url}. {exc}") from exc
+            status = 401 if exc.status == 401 else 502
+            raise HTTPException(status, connection_error(url, exc)) from exc
         finally:
             client.close()
         runtime.settings.update(url=url, key=key)

@@ -32,7 +32,14 @@ class Upload:
 
 
 class Immich:
-    def __init__(self, url: str, api_key: str, retries: int = 4, backoff: float = 1.5):
+    def __init__(
+        self,
+        url: str,
+        api_key: str,
+        retries: int = 4,
+        backoff: float = 1.5,
+        connect_timeout: float = 60.0,
+    ):
         self.url = url.rstrip("/")
         if self.url.endswith("/api"):
             self.url = self.url[:-4]
@@ -41,7 +48,7 @@ class Immich:
         self.client = httpx.Client(
             base_url=f"{self.url}/api",
             headers={"x-api-key": api_key, "Accept": "application/json"},
-            timeout=httpx.Timeout(60.0, read=None, write=None),
+            timeout=httpx.Timeout(connect_timeout, read=None, write=None),
             follow_redirects=True,
         )
 
@@ -78,15 +85,19 @@ class Immich:
         response = self._request(method, path, **kwargs)
         return response.json() if response.content else None
 
-    def identity(self) -> dict[str, Any]:
-        user = self._json("GET", "/users/me")
+    def version(self) -> dict[str, Any]:
+        """The server's version. Immich answers this without an API key."""
         version = self._json("GET", "/server/version")
         return {
-            "name": user.get("name") or user.get("email"),
-            "email": user.get("email"),
             "version": f"{version['major']}.{version['minor']}.{version['patch']}",
             "major": version["major"],
         }
+
+    def identity(self) -> dict[str, Any]:
+        user = self._json("GET", "/users/me")
+        return {"name": user.get("name") or user.get("email"), "email": user.get("email")} | (
+            self.version()
+        )
 
     def upload(
         self,

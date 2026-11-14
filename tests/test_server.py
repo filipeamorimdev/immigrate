@@ -125,6 +125,52 @@ def test_bad_key_gets_a_clear_message(client, immich):
     assert "refused that API key" in response.json()["detail"]
 
 
+def test_connection_is_not_set_up_at_first(client):
+    assert client.get("/api/connection").json() == {"connected": False, "error": None}
+
+
+def test_connection_reports_who_is_connected(client, immich):
+    store, _ = immich
+    connect(client, immich)
+    body = client.get("/api/connection").json()
+    assert body["connected"] and body["name"] == "Test" and body["version"] == "3.3.5"
+    assert store.key not in json.dumps(body)
+
+
+def test_connection_reports_a_key_that_stopped_working(client, immich):
+    store, _ = immich
+    connect(client, immich)
+    store.key = "rotated"
+    body = client.get("/api/connection").json()
+    assert body["connected"] is False
+    assert "refused that API key" in body["error"]
+
+
+def test_connection_reports_an_address_that_stopped_answering(client, immich):
+    connect(client, immich)
+    client.app.state.runtime.settings["url"] = "http://127.0.0.1:1"
+    body = client.get("/api/connection").json()
+    assert body["connected"] is False
+    assert "Couldn't reach Immich at http://127.0.0.1:1" in body["error"]
+
+
+def test_address_is_checked_without_a_key(client, immich):
+    _, url = immich
+    response = client.post("/api/connection/address", json={"url": url})
+    assert response.status_code == 200 and response.json()["version"] == "3.3.5"
+
+
+def test_address_that_doesnt_answer_gets_a_clear_message(client):
+    response = client.post("/api/connection/address", json={"url": "http://127.0.0.1:1"})
+    assert response.status_code == 502
+    assert "Couldn't reach Immich" in response.json()["detail"]
+
+
+def test_address_is_required(client):
+    response = client.post("/api/connection/address", json={"url": " "})
+    assert response.status_code == 422
+
+
 def test_url_must_be_http(client):
     response = client.post("/api/connect", json={"url": "ftp://nas", "key": "x"})
     assert response.status_code == 422
