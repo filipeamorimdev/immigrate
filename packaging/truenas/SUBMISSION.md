@@ -53,7 +53,7 @@ changing the library. It can also send any other folder of photos.
 
 - **Upstream**: https://github.com/filipeamorimdev/immigrate
 - **Documentation**: https://github.com/filipeamorimdev/immigrate#readme
-- **App Version**: 0.2.0
+- **App Version**: 0.4.0
 
 ### Testing
 

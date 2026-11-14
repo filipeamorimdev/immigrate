@@ -8,8 +8,8 @@ follows the catalog's `CONTRIBUTIONS.md` and recent community apps such as
 
 ## Ready
 
-- The image is pinned to `0.2.0` by digest in `ix_values.yaml`, and `app_version`
-  is `0.2.0`.
+- The image is pinned to `0.4.0` by digest in `ix_values.yaml`, and `app_version`
+  is `0.4.0`.
 - `lib_version` is 2.3.18, the newest library in the catalog on 2026-11-09, and
   `lib_version_hash` matches its `library/hashes.yaml`.
 - The default port is `30560`. The catalog's `port_validation.py` listed it as the
@@ -39,6 +39,12 @@ never in this folder:
   value files used a shared temporary folder and ports 18080 and 18081.
 
 On Linux, as in the catalog's CI, neither change is needed.
+
+On 2026-11-14 the pin moved to 0.4.0. The template and its settings didn't change.
+The 0.4.0 image was started the way the template runs it: read-only root, a tmpfs
+at `/run`, user and group 568, all capabilities dropped, no-new-privileges, port
+`30560`, and the library mounted read-only. It reported healthy. The catalog's
+scripts haven't been run against 0.4.0 yet, so run them in the fork before the PR.
 
 ## When you submit
 
