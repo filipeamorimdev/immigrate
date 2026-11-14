@@ -31,6 +31,30 @@ class Upload:
     sent: bool = True  # False when Immigrate linked to an asset without uploading
 
 
+class Reader:
+    """A file being uploaded, which reports how far the upload has read into it."""
+
+    def __init__(self, handle: BinaryIO, progress: Callable[[int], None]) -> None:
+        self.handle, self.progress = handle, progress
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.handle.read(size)
+        self.progress(self.handle.tell())
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self.handle.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self.handle.tell()
+
+    def fileno(self) -> int:
+        return self.handle.fileno()
+
+    def close(self) -> None:
+        self.handle.close()
+
+
 class Immich:
     def __init__(
         self,
@@ -110,7 +134,9 @@ class Immich:
         visibility: str = "timeline",
         live_video_id: str | None = None,
         sidecar: bytes | None = None,
+        progress: Callable[[int], None] | None = None,
     ) -> Upload:
+        """Upload one file. `progress` hears how many bytes of it have been read so far."""
         # No `filename` field: Immich checks every file part against it, so the
         # sidecar would be judged as IMG_0001.JPG and rejected. The asset part's
         # own name becomes originalFileName instead.
@@ -129,7 +155,8 @@ class Immich:
         def attempt() -> dict[str, Any]:
             # Reopened on every retry so a failed upload restarts from byte zero.
             handles.append(open(path, "rb"))
-            files: dict[str, tuple[str, Any, str]] = {"assetData": (filename, handles[-1], mime)}
+            data: Any = Reader(handles[-1], progress) if progress else handles[-1]
+            files: dict[str, tuple[str, Any, str]] = {"assetData": (filename, data, mime)}
             if sidecar:
                 files["sidecarData"] = (f"{filename}.xmp", sidecar, "application/xml")
             return {"data": fields, "files": files}

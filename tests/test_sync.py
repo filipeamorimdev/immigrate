@@ -230,3 +230,45 @@ def test_sidecar_is_valid_xml_with_escaping_and_southern_gps(scan):
     assert "33,52.128000S" in text and "151,12.558000W" in text
     assert "People/Ana Sá" in text and "Tom &amp; Jerry &lt;3" in text
     assert re.search(r"<exif:DateTimeOriginal>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d<", text)
+
+
+def test_a_sync_reports_its_progress_and_its_workers(scan, world):
+    _, immich, state = world
+    notes = []
+    job = Job(scan, state, immich, Options(workers=2), note=notes.append)
+    seen = []
+    original = job.sync_item
+
+    def watch(item):
+        seen.append(job.status())
+        original(item)
+
+    job.sync_item = watch
+    job.run()
+
+    during = seen[-1]
+    assert during["phase"] == "uploading" and during["todo"] == len(seen)
+    assert [worker["id"] for worker in during["workers"]] == [1, 2]
+    busy = [worker for worker in during["workers"] if worker["file"]]
+    assert busy and all(worker["size"] > 0 for worker in busy)
+
+    status = job.status()
+    assert status["handled"] == status["todo"] == status["done"]
+    # Everything was uploaded, so the total ends where the bytes sent did.
+    assert status["bytesSent"] == status["bytesDone"] == status["bytesTotal"] > 0
+    assert status["workers"] == []
+    assert sum(note.startswith("Sent ") for note in notes) == status["done"]
+
+
+def test_an_upload_reports_how_far_it_has_read(scan, world):
+    _, immich, _ = world
+    part = next(item for item in scan.items if not item.missing).part("main")
+    positions = []
+    immich.upload(
+        part.path,
+        part.filename,
+        "2024-01-01T00:00:00+00:00",
+        "2024-01-01T00:00:00+00:00",
+        progress=positions.append,
+    )
+    assert positions == sorted(positions) and positions[-1] == part.size

@@ -37,7 +37,8 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
 | `immich.py` | Immich API client, with retries for 429, 5xx, and network errors |
 | `state.py` | Remembers what was sent, so runs can resume and stay incremental |
 | `libraries.py` | One library's records, saved scan, choices, and schedule |
-| `sync.py` | Plans, runs, and verifies a sync |
+| `sync.py` | Plans, runs, and verifies a sync, and reports what each worker is sending |
+| `activity.py` | Keeps the recent log lines the page shows |
 | `server.py` | HTTP API, the list of libraries, and the scheduled sync loop |
 | `static/` | Setup steps, libraries, and settings, in plain HTML, CSS, and JavaScript |
 
@@ -114,5 +115,12 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
 - **The folder picker counts each folder on its own request.** The list of folders comes
   back at once, and the page asks for counts three at a time. A count stops after five
   seconds, so a huge tree can't hold up the picker or the NAS.
+- **The page's log is kept in memory.** `activity.py` holds the last 1,000 lines since
+  the container started, and the page asks for the lines after the one it last saw. A
+  handler copies everything Immigrate logs at INFO and above, whatever `LOG_LEVEL` is,
+  and each sent item adds a line that the container's log doesn't get.
+- **A sync's total follows what happens.** It starts as the size of every file Immich
+  didn't have at the check. A file that turns out to be linked comes off the total, and
+  one that has to be uploaded after all is added, so the bar never passes its end.
 - **The page doesn't show photos.** It has no login, and browsers can't show HEIC or
   RAW. Items already in Immich link to it, behind Immich's own login.

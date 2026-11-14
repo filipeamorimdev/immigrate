@@ -179,7 +179,16 @@ class Library:
             )
             self.check = check
             self.save_check(check)
-            log.info("Checked %s: %s", self.name, check.summary())
+            found = check.summary()
+            log.info(
+                "Checked %s: %d copies, %d already in Immich, %d without a date, "
+                "%d without a location",
+                self.name,
+                found["copies"],
+                found["inImmich"],
+                found["missingDate"],
+                found["missingLocation"],
+            )
         except Exception as exc:
             log.exception("Couldn't check the library at %s", self.path)
             self.check_error = f"Couldn't finish checking the library. Details: {exc}"

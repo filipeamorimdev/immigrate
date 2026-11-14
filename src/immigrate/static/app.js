@@ -36,6 +36,14 @@ let timeZonesLoading = false;
 let zoneNotice = "";
 let zoneError = "";
 const zoneSupport = {};
+// The log on a library's page: the lines so far, and how the reader left the box.
+let logLines = [];
+let logLast = 0;
+let logOpen = null; // null until the reader opens or closes it; it starts open while something runs
+let logScroll = { top: 0, pinned: true };
+const LOG_SHOWN = 300;
+// Recent readings of how much a sync has sent, to work out its speed.
+const pace = { job: null, samples: [] };
 const reports = {};
 const missing = {};
 const found = {}; // what each library's check found, from /findings
@@ -64,7 +72,23 @@ function zone() {
 }
 const when = (value) => new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short", ...zone() });
 const clock = (value) => new Date(value).toLocaleTimeString([], { timeStyle: "short", ...zone() });
+const clockSeconds = (value) => new Date(value).toLocaleTimeString([], { hour12: false, ...zone() });
 const isRunning = (job) => !!job && RUNNING.includes(job.phase);
+
+function timeLeft(seconds) {
+  if (seconds < 90) return "about a minute";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `about ${minutes} minutes`;
+  const hours = Math.round(minutes / 60);
+  return hours < 36 ? `about ${hours} hours` : `about ${Math.round(hours / 24)} days`;
+}
+
+// A progress bar. Without a total, it shows that work is going on, but not how far along it is.
+function bar(done, total, label) {
+  if (!total) return `<div class="bar unknown" role="progressbar" aria-label="${escapeHtml(label)}"><i></i></div>`;
+  const percent = Math.max(0, Math.min(100, (done / total) * 100));
+  return `<div class="bar" role="progressbar" aria-label="${escapeHtml(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}"><i style="width:${percent.toFixed(1)}%"></i></div>`;
+}
 
 function bytes(value) {
   if (!value) return "0 GB";
@@ -292,7 +316,8 @@ function renderWizardRead(library) {
       : done ? `${plural(done, "item")} found so far.` : opening;
     const after = checking ? "The first check reads every file, so it can take a while. Later checks only read what changed." : "";
     return `<h2>${checking ? "Checking" : "Reading"} ${escapeHtml(library.name)}</h2>
-      <p class="lead">${line} ${after}</p>
+      <div class="progress">${progressBar(library)}<p>${line} ${after}</p></div>
+      ${renderLog(true)}
       ${checking ? `<div class="actions"><button class="button" data-action="stop">Stop</button></div>` : ""}`;
   }
   if (!summary) {
@@ -657,11 +682,89 @@ function syncButton(library) {
   return `<button class="button primary" data-action="sync" data-id="${library.id}" ${busy ? "disabled" : ""}>Start sync</button>`;
 }
 
+// Bytes a second over the last few readings, or 0 until there are enough of them.
+function speedOf(job) {
+  if (pace.job !== job.startedAt) Object.assign(pace, { job: job.startedAt, samples: [] });
+  const now = Date.now();
+  const last = pace.samples.at(-1);
+  if (!last || now - last.at >= 900) pace.samples.push({ at: now, sent: job.bytesSent });
+  while (pace.samples.length > 2 && now - pace.samples[0].at > 20000) pace.samples.shift();
+  const first = pace.samples[0];
+  const seconds = (now - first.at) / 1000;
+  return seconds >= 3 ? Math.max(0, (job.bytesSent - first.sent) / seconds) : 0;
+}
+
+// The bar for whatever a library is doing now, or nothing when it's idle.
+function progressBar(library) {
+  const job = library.job;
+  if (isRunning(job)) {
+    if (job.phase === "albums") return bar(job.albumsDone, job.albumsTotal, "Albums built");
+    if (job.phase === "fixing") return bar(job.fixesDone, job.fixesTotal, "Dates and locations set");
+    if (job.phase === "uploading") {
+      return job.bytesTotal ? bar(job.bytesSent, job.bytesTotal, "Sent to Immich") : bar(job.handled, job.todo, "Items sent");
+    }
+    return bar(0, 0, "Starting");
+  }
+  if (library.scan.running) {
+    const { phase, done, total } = library.scan;
+    // Asking Immich is one request, so there's no telling how far along it is.
+    return bar(done, phase === "immich" ? 0 : total, phase === "reading" ? "Library read" : "Library checked");
+  }
+  return library.queued ? bar(0, 0, "Starting") : "";
+}
+
+function renderWorkers(job) {
+  if (job.phase !== "uploading" || !job.workers?.length) return "";
+  const rows = job.workers.map((worker) => {
+    if (!worker.file) {
+      return `<li class="worker idle"><span class="who">Worker ${worker.id}</span><span class="what">Waiting for the next item</span></li>`;
+    }
+    const detail = worker.size
+      ? `${worker.part ? `${worker.part}, ` : ""}${bytes(worker.sent)} of ${bytes(worker.size)}`
+      : "Linking to what Immich already has";
+    return `<li class="worker"><span class="who">Worker ${worker.id}</span>
+        <span class="what"><span class="path">${escapeHtml(worker.file)}</span><small>${detail}</small></span>
+        ${worker.size ? bar(worker.sent, worker.size, `Worker ${worker.id}`) : ""}</li>`;
+  }).join("");
+  return `<h4>Workers</h4>
+    <p class="muted">Each worker sends one item at a time, with its edit, RAW, and Live Photo video.</p>
+    <ul class="workers">${rows}</ul>`;
+}
+
+// The bar and sentence at the top of a running sync.
+function renderSyncProgress(library) {
+  const job = library.job;
+  let line = statusLine(library);
+  if (job.phase === "uploading") {
+    const speed = speedOf(job);
+    const left = job.bytesTotal - job.bytesSent;
+    line = `${count(job.handled)} of ${plural(job.todo, "item")} done.`;
+    if (job.bytesTotal) line += ` ${bytes(job.bytesSent)} of ${bytes(job.bytesTotal)} sent${speed ? `, at ${bytes(speed)} a second` : ""}.`;
+    if (speed && left > 0) line += ` ${timeLeft(left / speed).replace(/^a/, "A")} left.`;
+    if (!job.todo) line = "Everything is already in Immich.";
+  }
+  return `<div class="progress">${progressBar(library)}<p>${line}</p></div>${renderWorkers(job)}`;
+}
+
+function renderLog(busy) {
+  const shown = logLines.slice(-LOG_SHOWN);
+  const rows = shown.map((line) =>
+    `<p class="${line.level}"><time>${clockSeconds(line.at * 1000)}</time>${escapeHtml(line.text)}</p>`).join("");
+  const note = logLines.length > shown.length
+    ? `The last ${count(shown.length)} lines. The container's log has the rest.`
+    : "What Immigrate has done since it started. The container's log has the same lines, and more.";
+  return `<details class="log" id="log" ${logOpen ?? busy ? "open" : ""}><summary>Log</summary>
+      <div class="log-lines" id="log-lines" role="log" aria-live="off" aria-label="Log" tabindex="0">${rows || `<p>Nothing yet.</p>`}</div>
+      <p class="muted">${note}</p>
+    </details>`;
+}
+
 function renderDashboard() {
   const cards = state.libraries.map((library) => `<li class="card">
       <h3><a href="#/library/${library.id}">${escapeHtml(library.name)}</a></h3>
       <p class="muted path">${escapeHtml(shownPath(library))}</p>
       <p>${statusLine(library)}</p>
+      ${progressBar(library)}
       <p class="muted">${scheduleLine(library)}</p>
       <div class="actions">${syncButton(library)}<a class="button" href="#/library/${library.id}">Open</a></div>
     </li>`).join("");
@@ -677,7 +780,7 @@ function renderActivity(library) {
   const run = job || library.lastSync;
   if (library.scan.running || library.queued) {
     return `<h3 class="section">${library.queued ? "Reading, then syncing" : "Reading the library"}</h3>
-      <p class="lead">${statusLine(library)}</p>`;
+      <div class="progress">${progressBar(library)}<p>${statusLine(library)}</p></div>`;
   }
   if (!run) {
     return `<h3 class="section">Not synced yet</h3>
@@ -698,6 +801,7 @@ function renderActivity(library) {
     : `${syncButton(library)}<button class="button" data-action="verify">Check the result</button>`;
   return `<h3 class="section">${PHASES[run.phase]}</h3>
     ${finished}
+    ${running ? renderSyncProgress(library) : ""}
     <div class="figures">
       ${figure(count(run.done), "sent")}
       ${figure(count(run.skipped), "already in Immich")}
@@ -755,6 +859,7 @@ function renderLibrary(library) {
     <h2>${escapeHtml(library.name)}</h2>
     <p class="lead">${escapeHtml(shownPath(library))}<br>${scheduleLine(library)}</p>
     ${renderActivity(library)}
+    ${renderLog(busy)}
     ${renderCheck(library)}
     ${summary ? `<h3 class="section">In the library</h3>
       <p class="lead">${plural(summary.total, "item")}, read ${when(summary.scannedAt)}.</p>
@@ -830,7 +935,14 @@ function render() {
     return;
   }
   renderNav(current);
+  const before = document.getElementById("log-lines");
+  if (before && before.clientHeight) {
+    logScroll = { top: before.scrollTop, pinned: before.scrollHeight - before.scrollTop - before.clientHeight < 12 };
+  }
   view.innerHTML = renderPage(current);
+  const box = document.getElementById("log-lines");
+  // Stays on the newest line, unless the reader scrolled up to look at an older one.
+  if (box) box.scrollTop = logScroll.pinned ? box.scrollHeight : logScroll.top;
   drawMosaic();
   loadPageData(current);
 }
@@ -1180,6 +1292,12 @@ async function act(name, button) {
 }
 
 document.addEventListener("click", async (event) => {
+  if (event.target.closest("#log > summary")) {
+    // The click comes before the box opens or closes, so this is what it's about to be.
+    logOpen = !document.getElementById("log").open;
+    logScroll = { top: 0, pinned: true };
+    return;
+  }
   if (event.target.closest("[data-wizard-close]")) { wizardDialog.close(); return; }
   if (event.target.closest("[data-wizard-back]")) {
     Object.assign(wizard, { step: "address", error: "" });
@@ -1313,11 +1431,23 @@ document.addEventListener("submit", async (event) => {
   render();
 });
 
+async function loadLog() {
+  let found = await api(`/api/log?after=${logLast}`);
+  if (found.last < logLast) {
+    // Immigrate restarted, so its log starts again.
+    logLines = [];
+    found = await api("/api/log?after=0");
+  }
+  logLast = found.last;
+  logLines = logLines.concat(found.lines).slice(-1000);
+}
+
 async function tick() {
   state = await api("/api/state");
   lastTick = Date.now();
   const library = currentLibrary();
   mosaicText = library?.job ? await api("/api/mosaic") : "";
+  await loadLog().catch(() => {});
   render();
 }
 

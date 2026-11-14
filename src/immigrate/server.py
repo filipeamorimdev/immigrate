@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__, timezones
+from .activity import Activity, ActivityHandler
 from .config import Config
 from .findings import findings
 from .folder_library import count_media
@@ -120,6 +121,13 @@ class Runtime:
         self.temp_dir = Path(os.environ.get("TMPDIR", config.data_dir / "tmp"))
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = config.data_dir / "settings.json"
+        # The page shows these lines, so they're kept whatever LOG_LEVEL the container uses.
+        self.activity = Activity()
+        self.activity_handler = ActivityHandler(self.activity)
+        package = logging.getLogger("immigrate")
+        package.addHandler(self.activity_handler)
+        if package.getEffectiveLevel() > logging.INFO:
+            package.setLevel(logging.INFO)
         self.lock = threading.Lock()
         self.job: Job | None = None
         self.job_library: str | None = None
@@ -135,6 +143,7 @@ class Runtime:
             self.libraries[library.id] = library
 
     def close(self) -> None:
+        logging.getLogger("immigrate").removeHandler(self.activity_handler)
         for library in self.libraries.values():
             library.close()
 
@@ -315,7 +324,14 @@ class Runtime:
             if library.scan_running:
                 raise HTTPException(409, "Wait for the library read to finish.")
             client = self.immich()
-            job = Job(library.scan, library.state, client, library.options, library.check)
+            job = Job(
+                library.scan,
+                library.state,
+                client,
+                library.options,
+                library.check,
+                self.activity.add,
+            )
             scan_mtime = library.state.get_meta("scan_mtime")
 
             def run() -> None:
@@ -327,6 +343,7 @@ class Runtime:
                 finally:
                     client.close()
 
+            log.info("Syncing %s", library.name)
             self.job, self.job_library = job, library.id
             self.job_thread = threading.Thread(target=run, daemon=True, name="sync")
             self.job_thread.start()
@@ -660,6 +677,11 @@ def create_app(config: Config | None = None, *, background: bool = True) -> Fast
     @app.post("/api/leftovers/delete")
     def delete_leftovers() -> dict[str, int]:
         return runtime.delete_leftovers()
+
+    @app.get("/api/log")
+    def activity_log(after: int = 0) -> dict[str, Any]:
+        """The log lines after the one the page last saw."""
+        return runtime.activity.since(after)
 
     @app.get("/api/mosaic", response_class=PlainTextResponse)
     def mosaic() -> str:

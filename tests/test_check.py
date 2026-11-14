@@ -360,6 +360,7 @@ def test_items_immich_already_has_are_linked_without_uploading(tmp_path, world, 
     assert uploads(store) == before + 1
     status = job.status()
     assert status["done"] == 1 and status["skipped"] == 1 and status["bytesDone"] == len(b"new")
+    assert status["bytesTotal"] == status["bytesSent"] == len(b"new")
     [album] = store.albums.values()
     assert len(album["assets"]) == 2, "the linked item joins the album too"
     assert verify(scan, state, immich, Options(albums=True), result)["clean"]
@@ -389,6 +390,8 @@ def test_copies_upload_once_and_join_their_own_albums(tmp_path, world, fake_exif
     job = Job(scan, state, immich, Options(albums=True), result)
     job.run()
     assert uploads(store) == 1 and len(store.assets) == 1
+    # The copy counted toward the total until it was linked instead of uploaded.
+    assert job.status()["bytesTotal"] == job.status()["bytesSent"] == len(b"same")
     assert {a["albumName"]: len(a["assets"]) for a in store.albums.values()} == {
         "Photos/one": 1,
         "Photos/two": 1,

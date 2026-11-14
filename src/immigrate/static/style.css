@@ -236,6 +236,39 @@ summary { cursor: pointer; font-weight: 700; }
 .places li { padding: 0.2rem 0; }
 .places small { color: var(--soft-ink); }
 
+.bar { height: 0.5rem; margin: 0.5rem 0; border-radius: 999px; background: var(--held-back); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 999px; background: var(--exposed); }
+.bar.unknown i { width: 35%; animation: sweep 1.2s ease-in-out infinite alternate; }
+@keyframes sweep { from { margin-left: 0; } to { margin-left: 65%; } }
+@media (prefers-reduced-motion: reduce) { .bar.unknown i { width: 100%; opacity: 0.4; animation: none; } }
+.progress { margin: 0 0 1.75rem; }
+.progress .bar { height: 0.75rem; margin: 0 0 0.6rem; }
+.progress p { margin: 0; color: var(--soft-ink); }
+.card .bar { max-width: 24rem; }
+h4 { margin: 0 0 0.25rem; font-size: 1.0625rem; }
+.workers { margin: 0.75rem 0 2rem; padding: 0; border-top: 1px solid var(--line); list-style: none; }
+.worker { display: grid; grid-template-columns: 6rem 1fr; gap: 0 1rem; padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
+.worker .who { font-weight: 700; }
+.worker .what small { display: block; color: var(--soft-ink); font-size: 0.9375rem; }
+.worker .bar { grid-column: 2; margin: 0.4rem 0 0; }
+.worker.idle .what { color: var(--soft-ink); }
+.log { margin: 1.75rem 0 2rem; }
+.log-lines {
+  max-height: 20rem;
+  margin: 0.75rem 0 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--field);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font: 0.875rem/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.log-lines p { margin: 0; }
+.log-lines time { margin-right: 0.75rem; color: var(--soft-ink); }
+.log-lines .warning { color: var(--warning); }
+.log-lines .error { color: var(--problem); }
+
 .status-line { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 1.75rem; }
 .status-line::before { content: ""; flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--soft-ink); }
 .status-line.good::before { background: var(--exposed); }

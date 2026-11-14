@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from immigrate import timezones
+from immigrate.activity import Activity
 from immigrate.config import Config
 from immigrate.libraries import SCAN_LOG_SECONDS, Library, folder_for
 from immigrate.server import Runtime, create_app
@@ -169,6 +170,47 @@ def test_address_that_doesnt_answer_gets_a_clear_message(client):
 def test_address_is_required(client):
     response = client.post("/api/connection/address", json={"url": " "})
     assert response.status_code == 422
+
+
+def test_log_has_what_happened_and_only_sends_new_lines(client, immich):
+    library_id, _ = connect_and_read(client, immich)
+    sync_and_wait(client, library_id)
+    log = client.get("/api/log").json()
+    texts = [line["text"] for line in log["lines"]]
+    assert any(text.startswith("Reading the library") for text in texts)
+    assert any(text.startswith("Sent ") for text in texts)
+    assert any(text.startswith("Sync finished") for text in texts)
+    assert log["last"] == log["lines"][-1]["n"]
+    assert client.get(f"/api/log?after={log['last']}").json()["lines"] == []
+    newest = client.get(f"/api/log?after={log['last'] - 1}").json()["lines"]
+    assert [line["n"] for line in newest] == [log["last"]]
+
+
+def test_log_never_has_the_api_key(client, immich):
+    store, _ = immich
+    library_id, _ = connect_and_read(client, immich)
+    sync_and_wait(client, library_id)
+    assert store.key not in client.get("/api/log").text
+
+
+def test_log_keeps_only_the_newest_lines():
+    activity = Activity(kept=3)
+    for number in range(5):
+        activity.add(f"line {number}")
+    found = activity.since(0)
+    assert found["last"] == 5
+    assert [line["text"] for line in found["lines"]] == ["line 2", "line 3", "line 4"]
+
+
+def test_log_marks_warnings_and_leaves_out_debug_lines(client):
+    logger = logging.getLogger("immigrate.sync")
+    logger.debug("too detailed")
+    logger.warning("Couldn't send %s", "a.jpg")
+    lines = client.get("/api/log").json()["lines"]
+    assert [(line["level"], line["text"]) for line in lines if "a.jpg" in line["text"]] == [
+        ("warning", "Couldn't send a.jpg")
+    ]
+    assert all("too detailed" not in line["text"] for line in lines)
 
 
 def test_url_must_be_http(client):

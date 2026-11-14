@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -17,7 +19,7 @@ from typing import Any
 
 from .check import Check
 from .immich import Immich, ImmichError, Upload
-from .library import Item, Scan
+from .library import Item, Part, Scan
 from .state import State
 from .xmp import build_sidecar
 
@@ -27,6 +29,9 @@ ALBUM_CHUNK = 500
 STOP_AFTER_FAILURES_IN_A_ROW = 20
 
 FIX_CHUNK = 500
+
+# What the page calls each file of an item while a worker sends it.
+PART_NAMES = {"main": "original", "edit": "edit", "raw": "RAW", "live": "Live Photo video"}
 
 # Single-character cell codes for the mosaic on the sync screen.
 WAITING, DONE, SKIPPED, FAILED, MISSING, EXCLUDED = "w", "d", "s", "f", "m", "x"
@@ -58,6 +63,15 @@ class Options:
             raise ValueError("existing must be 'link' or 'skip'")
         options.workers = max(1, min(int(options.workers), 8))
         return options
+
+
+def size_text(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit in ("B", "KB") else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
 
 
 def sidecar_for(item: Item, options: Options) -> bytes | None:
@@ -179,9 +193,19 @@ class Job:
         immich: Immich,
         options: Options,
         check: Check | None = None,
+        note: Callable[[str], None] | None = None,
     ):
         self.scan, self.state, self.immich, self.options = scan, state, immich, options
         self.check = check
+        # Adds a line to the log on the page. Each sent item gets one.
+        self.note = note or (lambda _: None)
+        self.started_at = time.time()
+        # What each upload thread is sending now, by thread, and the number the page shows.
+        self.active: dict[int, dict[str, Any]] = {}
+        self.slots: dict[int, int] = {}
+        self.todo_total = 0
+        self.handled = 0
+        self.bytes_total = 0
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.phase = "queued"
@@ -199,11 +223,55 @@ class Job:
         self.known = state.all_items()
         # Checksums of files Immich already holds, and the asset each one is.
         self.held: dict[str, str] = dict(check.in_immich) if check else {}
+        self.held_at_start = frozenset(self.held)
 
     def mark(self, item: Item, code: str, added_bytes: int = 0) -> None:
         with self.lock:
             self.cells[self.index[item.uuid]] = code
             self.bytes_done += added_bytes
+            if added_bytes and (worker := self.active.get(threading.get_ident())):
+                # Now counted in `bytes_done`, so it isn't counted twice.
+                worker["counted"] = True
+
+    def begin(self, item: Item) -> None:
+        """Note that this thread's worker has picked up an item."""
+        ident = threading.get_ident()
+        with self.lock:
+            slot = self.slots.setdefault(ident, len(self.slots) + 1)
+            self.active[ident] = {
+                "id": slot,
+                "file": item.filename,
+                "part": None,
+                "sent": 0,
+                "size": self.upload_size(item),
+                "base": 0,
+                "counted": False,
+            }
+
+    def end(self) -> None:
+        with self.lock:
+            self.active.pop(threading.get_ident(), None)
+            self.handled += 1
+
+    def upload_size(self, item: Item) -> int:
+        return sum(p.size for p in item.parts if p.role != "edit" or self.options.edits == "stack")
+
+    def workers(self) -> list[dict[str, Any]]:
+        """One row for each worker, in order. Call with the lock held."""
+        busy = {worker["id"]: worker for worker in self.active.values()}
+        rows = []
+        for slot in range(1, self.options.workers + 1):
+            worker = busy.get(slot)
+            rows.append(
+                {
+                    "id": slot,
+                    "file": worker["file"] if worker else None,
+                    "part": worker["part"] if worker else None,
+                    "sent": min(worker["sent"], worker["size"]) if worker else 0,
+                    "size": worker["size"] if worker else 0,
+                }
+            )
+        return rows
 
     def warn(self, text: str) -> None:
         log.warning(text)
@@ -226,6 +294,14 @@ class Job:
                 "excluded": cells.count(EXCLUDED),
                 "waiting": cells.count(WAITING),
                 "bytesDone": self.bytes_done,
+                # Includes what the workers have sent of the files they're on now.
+                "bytesSent": self.bytes_done
+                + sum(w["sent"] for w in self.active.values() if not w["counted"]),
+                "bytesTotal": self.bytes_total,
+                "todo": self.todo_total,
+                "handled": self.handled,
+                "startedAt": self.started_at,
+                "workers": self.workers() if self.phase == "uploading" else [],
                 "albumsDone": self.albums_done,
                 "albumsTotal": self.albums_total,
                 "fixesDone": self.fixes_done,
@@ -239,17 +315,39 @@ class Job:
         with self.lock:
             return "".join(self.cells)
 
-    def send(self, path: str, filename: str, created: str, modified: str, **fields: Any) -> Upload:
+    def send(self, part: Part, created: str, modified: str, **fields: Any) -> Upload:
         """Upload a file, unless Immich is known to hold it already."""
-        checksum = None
-        if self.check and self.check.still_matches(path):
-            checksum = self.check.checksum(path)
-        if checksum:
-            with self.lock:
-                held = self.held.get(checksum)
-            if held:
-                return Upload(held, duplicate=True, sent=False)
-        result = self.immich.upload(path, filename, created, modified, **fields)
+        path = part.path
+        known = self.check.checksum(path) if self.check else None
+        checksum = known if known and self.check and self.check.still_matches(path) else None
+        with self.lock:
+            worker = self.active.get(threading.get_ident())
+            if worker:
+                worker["part"] = PART_NAMES.get(part.role)
+                worker["base"] = worker["sent"]
+        with self.lock:
+            held = self.held.get(checksum) if checksum else None
+            # The total assumed that files Immich had at the start are linked, and the
+            # rest uploaded. This file turned out the other way, so the total follows.
+            expected_link = known in self.held_at_start
+            if held and not expected_link:
+                self.bytes_total = max(self.bytes_total - part.size, 0)
+            elif not held and expected_link:
+                self.bytes_total += part.size
+            if held and worker:
+                # Nothing to upload for this file, so the worker's bar doesn't wait for it.
+                worker["size"] = max(worker["size"] - part.size, 0)
+        if held:
+            return Upload(held, duplicate=True, sent=False)
+
+        def progress(position: int) -> None:
+            # A retry starts the file again, so this is a position, not an amount to add.
+            if worker:
+                worker["sent"] = worker["base"] + position
+
+        result = self.immich.upload(
+            path, part.filename, created, modified, progress=progress, **fields
+        )
         if checksum:
             with self.lock:
                 self.held.setdefault(checksum, result.id)
@@ -267,7 +365,7 @@ class Job:
 
         live_id = None
         if live := item.part("live"):
-            upload = self.send(live.path, live.filename, created, modified, visibility="hidden")
+            upload = self.send(live, created, modified, visibility="hidden")
             live_id = ids["live"] = upload.id
             sent += live.size if upload.sent else 0
 
@@ -275,8 +373,7 @@ class Job:
         if main is None:
             raise OSError(f"{item.filename} has no original on disk")
         result = self.send(
-            main.path,
-            main.filename,
+            main,
             created,
             modified,
             favorite=item.favorite,
@@ -304,8 +401,7 @@ class Job:
         stack: list[str] = []
         if (edit := item.part("edit")) and options.edits == "stack":
             upload = self.send(
-                edit.path,
-                edit.filename,
+                edit,
                 created,
                 modified,
                 favorite=item.favorite,
@@ -318,8 +414,7 @@ class Job:
         stack.append(ids["main"])
         if raw := item.part("raw"):
             upload = self.send(
-                raw.path,
-                raw.filename,
+                raw,
                 created,
                 modified,
                 visibility=visibility,
@@ -338,6 +433,10 @@ class Job:
         self.state.save_item(item.uuid, current, "done", stack[0], ids)
         # Linked to what Immich already had, without sending anything.
         self.mark(item, DONE if sent or not self.check else SKIPPED, sent)
+        if sent:
+            self.note(f"Sent {item.filename} ({size_text(sent)})")
+        else:
+            self.note(f"Linked {item.filename}, which Immich already has")
 
     def run_items(self) -> None:
         options = self.options
@@ -360,11 +459,28 @@ class Job:
         copies = self.check.copies if self.check else {}
         todo.sort(key=lambda item: item.uuid in copies)
 
+        # What's left to upload, leaving out files Immich already has. A file that another
+        # item sends first is taken off the total when it's linked instead.
+        for item in todo:
+            for part in item.parts:
+                if part.role == "edit" and options.edits != "stack":
+                    continue
+                checksum = self.check.checksum(part.path) if self.check else None
+                if checksum not in self.held_at_start:
+                    self.bytes_total += part.size
+        self.todo_total = len(todo)
         self.phase = "uploading"
+        log.info(
+            "Sending %d items (%s) with %d workers",
+            len(todo),
+            size_text(self.bytes_total),
+            options.workers,
+        )
 
         def work(item: Item) -> None:
             if self.stop_event.is_set():
                 return
+            self.begin(item)
             try:
                 self.sync_item(item)
                 with self.lock:
@@ -384,6 +500,8 @@ class Job:
                         f"Last error: {exc}"
                     )
                     self.stop_event.set()
+            finally:
+                self.end()
 
         first = [item for item in todo if item.uuid not in copies]
         later = [item for item in todo if item.uuid in copies]
@@ -420,6 +538,8 @@ class Job:
                 continue
             groups.setdefault(values, []).append((item.uuid, asset_ids, applied))
         self.fixes_total = sum(len(group) for group in groups.values())
+        if self.fixes_total:
+            log.info("Setting dates and locations on %d items", self.fixes_total)
         for (date, latitude, longitude), entries in groups.items():
             if self.stop_event.is_set():
                 return
@@ -454,6 +574,7 @@ class Job:
                 wanted.setdefault(title, []).append(record["primary_id"])
 
         self.albums_total = len(wanted)
+        log.info("Building %d albums", len(wanted))
         existing = self.immich.albums()
         for title, asset_ids in wanted.items():
             if self.stop_event.is_set():
@@ -472,9 +593,11 @@ class Job:
             except ImmichError as exc:
                 self.warn(f"Album {title}: {exc}")
             self.albums_done += 1
+            self.note(f"Album {title} is up to date ({len(asset_ids)} items)")
 
     def run(self) -> None:
-        log.info("Sync started: %d items, options %s", len(self.scan.items), asdict(self.options))
+        log.info("Sync started: %d items in the library", len(self.scan.items))
+        log.debug("Sync options: %s", asdict(self.options))
         try:
             self.run_items()
             if not self.stop_event.is_set():

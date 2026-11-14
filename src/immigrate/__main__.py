@@ -14,6 +14,8 @@ def main() -> None:
     config = Config.from_env()
     handler = logging.StreamHandler()
     handler.setFormatter(Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s"))
+    # The level is on the handler, because the page's log listens at INFO whatever this is.
+    handler.setLevel(config.log_level)
     logging.basicConfig(level=config.log_level, handlers=[handler])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     uvicorn.run(
