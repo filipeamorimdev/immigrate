@@ -185,7 +185,7 @@ This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
 ```yaml
 services:
   immigrate:
-    # Pin a version, such as :0.5.0, to update only when you choose to.
+    # Pin a version, such as :0.5.1, to update only when you choose to.
     image: ghcr.io/filipeamorimdev/immigrate:latest
     restart: unless-stopped
     ports:

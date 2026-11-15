@@ -69,12 +69,14 @@ def findings(scan: Scan, check: Check, state: State, kind: str, root: str) -> di
 
     trashed = set(check.trashed)
     existing = []
+    existing_items: list[Item] = []
     for item in scan.items:
         if item.uuid in check.copies or item.missing:
             continue
         asset = check.existing_asset(item)
         record = records.get(item.uuid)
         if asset and not (record and record["status"] == "done"):
+            existing_items.append(item)
             main = item.part("main")
             existing.append(
                 {
@@ -124,9 +126,11 @@ def findings(scan: Scan, check: Check, state: State, kind: str, root: str) -> di
 
     missing_date, missing_location = set(check.missing_date), set(check.missing_location)
     gaps = []
+    gap_items: list[Item] = []
     for item in scan.items:
         if item.uuid not in missing_date and item.uuid not in missing_location:
             continue
+        gap_items.append(item)
         chosen = fixes.get(item.uuid)
         gaps.append(
             {
@@ -144,7 +148,20 @@ def findings(scan: Scan, check: Check, state: State, kind: str, root: str) -> di
                 "suggestion": suggestion(item) if item.uuid in missing_location else None,
             }
         )
+
+    def split(items: list[Item]) -> dict[str, int]:
+        return {
+            "photos": sum(1 for i in items if not i.is_video),
+            "videos": sum(1 for i in items if i.is_video),
+        }
+
     return {
+        "split": {
+            "copies": split([by_uuid[u] for u in check.copies if u in by_uuid]),
+            "existing": split(existing_items),
+            "date": split([i for i in gap_items if i.uuid in missing_date]),
+            "location": split([i for i in gap_items if i.uuid in missing_location]),
+        },
         "copies": copies,
         "copyGroups": len(groups),
         "existing": existing[:LIST_LIMIT],

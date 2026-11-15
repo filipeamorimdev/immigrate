@@ -78,6 +78,7 @@ h1, h2, .figure strong {
   background: var(--warning);
 }
 .masthead h1 { margin: 0; font-size: 2.75rem; font-weight: 700; line-height: 1.1; }
+.masthead h1 a.home { color: inherit; text-decoration: none; }
 .masthead p { margin: 0; color: var(--soft-ink); }
 
 .tabs { display: flex; gap: 1.75rem; margin: 2rem 0 0; border-bottom: 1px solid var(--line); }
@@ -126,6 +127,7 @@ a { color: var(--exposed); text-underline-offset: 3px; }
 .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 1.25rem 2rem; margin: 0 0 2rem; }
 .figure strong { display: block; font-size: 1.875rem; font-weight: 600; line-height: 1.2; }
 .figure span { color: var(--soft-ink); font-size: 0.9375rem; }
+.figure small { display: block; color: var(--soft-ink); font-size: 0.8125rem; }
 
 label.field { display: block; margin-bottom: 1.25rem; font-weight: 700; }
 label.field small { display: block; color: var(--soft-ink); font-size: 0.9375rem; font-weight: 400; }

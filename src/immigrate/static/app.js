@@ -191,7 +191,8 @@ function renderNav(current) {
     `<li class="${i < index ? "done" : ""}" ${i === index ? 'aria-current="step"' : ""}>${i + 1}. ${name}</li>`).join("");
 }
 
-const figure = (value, label) => `<div class="figure"><strong>${value}</strong><span>${label}</span></div>`;
+const figure = (value, label, detail = "") =>
+  `<div class="figure"><strong>${value}</strong><span>${label}</span>${detail ? `<small>${detail}</small>` : ""}</div>`;
 const errorLine = (text) => text ? `<p class="error" role="alert">${escapeHtml(text)}</p>` : "";
 
 function renderConnectForm() {
@@ -278,6 +279,7 @@ function renderUnreadable(summary) {
 function renderSummary(summary, kind) {
   if (kind === "folder") {
     return `<div class="figures">
+        ${figure(count(summary.total), "items")}
         ${figure(count(summary.photos), "photos")}
         ${figure(count(summary.videos), "videos")}
         ${figure(count(summary.raw), "RAW pairs")}
@@ -287,6 +289,7 @@ function renderSummary(summary, kind) {
       ${renderUnreadable(summary)}`;
   }
   return `<div class="figures">
+      ${figure(count(summary.total), "items")}
       ${figure(count(summary.photos), "photos")}
       ${figure(count(summary.videos), "videos")}
       ${figure(count(summary.albums), "albums")}
@@ -396,6 +399,10 @@ function gapCounts(data) {
     dateSet: dates.filter((g) => g.fix?.date).length, locationSet: places.filter(hasPlace).length };
 }
 
+function splitLine(split) {
+  return `${plural(split.photos, "photo")}, ${plural(split.videos, "video")}`;
+}
+
 function renderFindings(library) {
   const { check, checkError, running } = library.scan;
   if (running) return "";
@@ -432,10 +439,10 @@ function renderFindings(library) {
   return `<h3 class="section">Duplicates and missing details</h3>
     <p class="lead">Checked ${when(check.checkedAt)}.</p>
     <div class="figures">
-      ${figure(count(check.copies), "copies")}
-      ${figure(count(data.existingCount), "already in Immich")}
-      ${folder ? figure(count(counts.date), "without a date") : ""}
-      ${figure(count(counts.location), "without a location")}
+      ${figure(count(check.copies), "copies", splitLine(data.split.copies))}
+      ${figure(count(data.existingCount), "already in Immich", splitLine(data.split.existing))}
+      ${folder ? figure(count(counts.date), "without a date", splitLine(data.split.date)) : ""}
+      ${figure(count(counts.location), "without a location", splitLine(data.split.location))}
     </div>
     ${notes.length ? `<div class="note">${notes.map((n) => `<p>${n}</p>`).join("")}</div>` : ""}
     ${copies}${existing}
