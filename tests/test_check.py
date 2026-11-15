@@ -431,7 +431,9 @@ def test_dates_and_locations_that_were_set_go_to_immich_once(tmp_path, world, fa
     a, b, c = items["a.jpg"].uuid, items["b.jpg"].uuid, items["c.jpg"].uuid
     state.save_fixes([a, b], latitude=38.7, longitude=-9.1, place="Lisbon")
     state.save_fixes([b], date="2019-03-14T10:00:00+00:00")
+    assert plan(scan, state, Options(), result)["fixes"] == 2
     Job(scan, state, immich, Options(), result).run()
+    assert plan(scan, state, Options(), result)["fixes"] == 0
     assert sorted(len(u["ids"]) for u in store.updates) == [1, 1]
     assert {frozenset(u) for u in store.updates} == {
         frozenset({"ids", "latitude", "longitude"}),
@@ -442,6 +444,7 @@ def test_dates_and_locations_that_were_set_go_to_immich_once(tmp_path, world, fa
     assert len(store.updates) == 2, "nothing is sent again"
     state.save_fixes([c], date="2018-01-01T00:00:00+00:00")
     state.save_fixes([a], latitude=41.1, longitude=-8.6, place="Porto")
+    assert plan(scan, state, Options(), result)["fixes"] == 2, "the new one and the changed one"
     Job(scan, state, immich, Options(), result).run()
     assert len(store.updates) == 4
     record = state.all_items()[a]

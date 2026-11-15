@@ -274,6 +274,33 @@ def test_full_flow_over_http(client, immich):
     assert preview["unchanged"] == 12
 
 
+def test_each_library_says_what_is_out_of_sync(client, immich):
+    assert first(client.get("/api/state").json())["nextSync"] is None, "not read yet"
+    library_id, library = connect_and_read(client, immich)
+    waiting = library["nextSync"]
+    assert waiting["new"] == 12 and waiting["bytes"] > 0
+    # One of the two originals that aren't on the NAS is hidden, so it's left out instead.
+    assert waiting["missing"] == 1 and waiting["excluded"] == 1
+    assert waiting["newAlbums"] == 7 and waiting["fixes"] == 0
+    library = first(sync_and_wait(client, library_id))
+    done = library["nextSync"]
+    assert done["new"] == done["changed"] == done["retry"] == done["newAlbums"] == 0
+    assert done["unchanged"] == 12 and done["bytes"] == 0 and done["missing"] == 1
+
+
+def test_what_is_out_of_sync_is_only_worked_out_after_a_change(client, immich):
+    library_id, _ = connect_and_read(client, immich)
+    library = client.app.state.runtime.libraries[library_id]
+    assert library.next_sync() is library.next_sync()
+    before = library.next_sync()
+    body = {"options": {"albums": False}, "autoMinutes": 0}
+    changed = client.post(f"/api/libraries/{library_id}/settings", json=body).json()
+    assert before["newAlbums"] == 7 and changed["nextSync"]["newAlbums"] == 0
+    uuid = library.scan.items[0].uuid
+    library.state.save_fixes([uuid], date="2019-01-01T00:00:00+00:00")
+    assert library.next_sync()["fixes"] == 1
+
+
 def test_start_sync_reads_the_library_first(client, immich):
     connect(client, immich)
     library_id = first(client.get("/api/state").json())["id"]

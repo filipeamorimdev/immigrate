@@ -20,7 +20,7 @@ from .folders import FOLDER, PHOTOS
 from .immich import Immich
 from .library import Scan, scan_library
 from .state import State
-from .sync import Options
+from .sync import Options, plan
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ class Library:
         self.scan_logged_at: float | None = None
         self.queued = False  # a sync starts when the current read ends
         self.last_check = float(self.state.get_meta("last_check", 0.0))
+        self.planned: tuple[Any, dict[str, Any]] | None = None  # what `next_sync` last found
 
     @property
     def name(self) -> str:
@@ -138,6 +139,25 @@ class Library:
             return os.stat(Path(self.path) / "database" / "Photos.sqlite").st_mtime
         except OSError:
             return None
+
+    def next_sync(self) -> dict[str, Any] | None:
+        """What a sync would send now, going by the last read, or None before the first read.
+
+        The list of libraries asks at every refresh, so this is only worked out again
+        after a read, a check, a change of choices, or a change to the records.
+        """
+        if self.scan is None:
+            return None
+        check = self.check
+        key = (
+            self.scan.scanned_at,
+            (id(check), check.checked_at) if check else None,
+            asdict(self.options),
+            self.state.revision(),
+        )
+        if self.planned is None or self.planned[0] != key:
+            self.planned = (key, plan(self.scan, self.state, self.options, check))
+        return self.planned[1]
 
     def record_check(self, now: float) -> None:
         self.last_check = now

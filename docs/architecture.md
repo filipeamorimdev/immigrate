@@ -122,5 +122,10 @@ Browser ──HTTP──> server.py ──> library.py ──> osxphotos ──>
 - **A sync's total follows what happens.** It starts as the size of every file Immich
   didn't have at the check. A file that turns out to be linked comes off the total, and
   one that has to be uploaded after all is added, so the bar never passes its end.
+- **The list of libraries says what's out of sync without reading anything.** Each
+  library's state carries `plan()` for its saved read, check, and choices, so it's as old
+  as the last read and doesn't ask Immich. `Library.next_sync()` keeps the answer until
+  the read, the check, the choices, or `state.db` change, and it's left out while the
+  library is read or synced.
 - **The page doesn't show photos.** It has no login, and browsers can't show HEIC or
   RAW. Items already in Immich link to it, behind Immich's own login.

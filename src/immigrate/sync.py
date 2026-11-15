@@ -123,9 +123,29 @@ def left_out(
     return options.existing == "skip" and not already and check.existing_asset(item) is not None
 
 
+def fix_target(
+    fix: dict[str, Any], record: dict[str, Any]
+) -> tuple[list[str], tuple[Any, ...], str]:
+    """The assets a date or location goes to, its values, and what's recorded once it's set."""
+    asset_ids = sorted(set(record["asset_ids"].values()))
+    values = (fix["date"], fix["latitude"], fix["longitude"])
+    return asset_ids, values, repr((asset_ids, values))
+
+
+def fix_waits(fix: dict[str, Any], record: dict[str, Any] | None, missing: bool) -> bool:
+    """Whether a sync still has this item's date or location to set in Immich."""
+    if not fix["date"] and (fix["latitude"] is None or fix["longitude"] is None):
+        return False
+    if record is None or record["status"] != "done":
+        # It's set once the item is sent, and an item that isn't on the NAS can't be.
+        return not missing
+    return bool(fix["applied"] != fix_target(fix, record)[2])
+
+
 def plan(scan: Scan, state: State, options: Options, check: Check | None = None) -> dict[str, Any]:
     """Work out what a sync would do, without contacting Immich."""
     known = state.all_items()
+    fixes = state.fixes()
     new = changed = unchanged = excluded = missing = retry = linked = 0
     new_bytes = 0
     # Files that won't need uploading: Immich has them, or an earlier item sends them.
@@ -182,6 +202,13 @@ def plan(scan: Scan, state: State, options: Options, check: Check | None = None)
         "newAlbums": sum(1 for a in scan.album_names if not state.album_id(a))
         if options.albums
         else 0,
+        "fixes": sum(
+            1
+            for item in scan.items
+            if (fix := fixes.get(item.uuid))
+            and not left_out(item, options, check, known.get(item.uuid))
+            and fix_waits(fix, known.get(item.uuid), item.missing)
+        ),
     }
 
 
@@ -531,9 +558,7 @@ class Job:
                 continue
             if left_out(item, self.options, self.check, record):
                 continue
-            asset_ids = sorted(set(record["asset_ids"].values()))
-            values = (fix["date"], fix["latitude"], fix["longitude"])
-            applied = repr((asset_ids, values))
+            asset_ids, values, applied = fix_target(fix, record)
             if fix["applied"] == applied:
                 continue
             groups.setdefault(values, []).append((item.uuid, asset_ids, applied))

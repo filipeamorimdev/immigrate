@@ -680,6 +680,25 @@ function scheduleLine(library) {
   return `Checks for changes ${EVERY[library.autoMinutes]}.${checked}${next}`;
 }
 
+// What a sync would send now, going by the last read. Nothing while the library is busy.
+function outOfSyncLine(library) {
+  const next = library.nextSync;
+  const read = library.scan.summary;
+  if (!next || !read) return "";
+  const waiting = [];
+  if (next.new) waiting.push(plural(next.new, "new item"));
+  if (next.changed) waiting.push(plural(next.changed, "changed item"));
+  if (next.retry) waiting.push(`${plural(next.retry, "item")} that failed last time`);
+  if (next.newAlbums) waiting.push(plural(next.newAlbums, "new album"));
+  if (next.fixes) waiting.push(`${plural(next.fixes, "item")} with a date or location to set`);
+  let text = waiting.length ? `Out of sync: ${waiting.join(", ")}.` : "In sync.";
+  if (next.new + next.changed + next.retry) {
+    text += next.bytes ? ` ${bytes(next.bytes)} to upload.` : " Immich already has the files, so nothing is uploaded.";
+  }
+  if (next.missing) text += ` ${plural(next.missing, "original isn't", "originals aren't")} on the NAS.`;
+  return `<p class="sync-state ${waiting.length ? "out" : ""}">${text} <span class="muted">Going by the last read, ${when(read.scannedAt)}.</span></p>`;
+}
+
 function syncButton(library) {
   if (isRunning(library.job)) return `<button class="button" data-action="stop">Stop</button>`;
   if (!isSetUp(library) && !library.scan.running && !library.queued) {
@@ -772,6 +791,7 @@ function renderDashboard() {
       <p class="muted path">${escapeHtml(shownPath(library))}</p>
       <p>${statusLine(library)}</p>
       ${progressBar(library)}
+      ${outOfSyncLine(library)}
       <p class="muted">${scheduleLine(library)}</p>
       <div class="actions">${syncButton(library)}<a class="button" href="#/library/${library.id}">Open</a></div>
     </li>`).join("");

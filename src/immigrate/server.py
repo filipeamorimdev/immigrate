@@ -410,6 +410,8 @@ class Runtime:
                 "checkError": library.check_error,
             },
             "queued": library.queued,
+            # Left out while the library is read or synced, when the answer keeps changing.
+            "nextSync": None if self.busy(library) else library.next_sync(),
             "job": job.status() if job else None,
             "counts": library.state.counts(),
             "lastSync": library.state.get_meta("last_sync"),

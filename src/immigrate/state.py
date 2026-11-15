@@ -48,6 +48,11 @@ class State:
         with self.lock:
             self.db.close()
 
+    def revision(self) -> int:
+        """A number that grows with every change saved here, so what's read can be reused."""
+        with self.lock:
+            return self.db.total_changes
+
     def all_items(self) -> dict[str, dict[str, Any]]:
         with self.lock:
             rows = self.db.execute(

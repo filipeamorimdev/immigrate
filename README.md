@@ -123,7 +123,7 @@ stop it and pick up later. Later checks only read files that changed.
 
 ## A look around
 
-Every library you add is listed with its last sync and schedule.
+Every library you add is listed with its last sync, what's out of sync, and its schedule.
 
 ![Libraries page with one library, last synced Nov 4, 2026, with Start sync and Open buttons](docs/images/libraries.png)
 
@@ -185,7 +185,7 @@ This works on TrueNAS SCALE 24.10 and later, where apps run on Docker.
 ```yaml
 services:
   immigrate:
-    # Pin a version, such as :0.5.1, to update only when you choose to.
+    # Pin a version, such as :0.5.2, to update only when you choose to.
     image: ghcr.io/filipeamorimdev/immigrate:latest
     restart: unless-stopped
     ports:
